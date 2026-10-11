@@ -5,15 +5,15 @@ import android.content.Intent;
 import android.os.PowerManager;
 
 import com.eveningoutpost.dexdrip.Home;
-import com.eveningoutpost.dexdrip.ImportedLibraries.usbserial.util.HexDump;
-import com.eveningoutpost.dexdrip.Models.JoH;
-import com.eveningoutpost.dexdrip.Models.Treatments;
-import com.eveningoutpost.dexdrip.Models.UserError;
+import com.eveningoutpost.dexdrip.importedlibraries.usbserial.util.HexDump;
+import com.eveningoutpost.dexdrip.models.JoH;
+import com.eveningoutpost.dexdrip.models.Treatments;
+import com.eveningoutpost.dexdrip.models.UserError;
 import com.eveningoutpost.dexdrip.R;
-import com.eveningoutpost.dexdrip.Services.JamBaseBluetoothService;
-import com.eveningoutpost.dexdrip.UtilityModels.Constants;
-import com.eveningoutpost.dexdrip.UtilityModels.Inevitable;
-import com.eveningoutpost.dexdrip.UtilityModels.RxBleProvider;
+import com.eveningoutpost.dexdrip.services.JamBaseBluetoothService;
+import com.eveningoutpost.dexdrip.utilitymodels.Constants;
+import com.eveningoutpost.dexdrip.utilitymodels.Inevitable;
+import com.eveningoutpost.dexdrip.utilitymodels.RxBleProvider;
 import com.eveningoutpost.dexdrip.insulin.pendiq.messages.InjectionStatusTx;
 import com.eveningoutpost.dexdrip.insulin.pendiq.messages.InsulinLogRx;
 import com.eveningoutpost.dexdrip.insulin.pendiq.messages.InsulinLogTx;
@@ -21,15 +21,16 @@ import com.eveningoutpost.dexdrip.insulin.pendiq.messages.SetInjectTx;
 import com.eveningoutpost.dexdrip.insulin.pendiq.messages.SetTimeTx;
 import com.eveningoutpost.dexdrip.insulin.pendiq.messages.StatusRx;
 import com.eveningoutpost.dexdrip.insulin.pendiq.messages.StatusTx;
+import com.eveningoutpost.dexdrip.utils.bt.Subscription;
 import com.eveningoutpost.dexdrip.xdrip;
-import com.polidea.rxandroidble.RxBleClient;
-import com.polidea.rxandroidble.RxBleConnection;
-import com.polidea.rxandroidble.RxBleDevice;
-import com.polidea.rxandroidble.RxBleDeviceServices;
-import com.polidea.rxandroidble.exceptions.BleDisconnectedException;
-import com.polidea.rxandroidble.exceptions.BleScanException;
-import com.polidea.rxandroidble.scan.ScanResult;
-import com.polidea.rxandroidble.scan.ScanSettings;
+import com.polidea.rxandroidble2.RxBleClient;
+import com.polidea.rxandroidble2.RxBleConnection;
+import com.polidea.rxandroidble2.RxBleDevice;
+import com.polidea.rxandroidble2.RxBleDeviceServices;
+import com.polidea.rxandroidble2.exceptions.BleDisconnectedException;
+import com.polidea.rxandroidble2.exceptions.BleScanException;
+import com.polidea.rxandroidble2.scan.ScanResult;
+import com.polidea.rxandroidble2.scan.ScanSettings;
 
 import java.nio.charset.Charset;
 import java.util.ArrayList;
@@ -40,11 +41,14 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
 import lombok.RequiredArgsConstructor;
+/*
 import rx.Subscription;
 import rx.schedulers.Schedulers;
+*/
+import io.reactivex.schedulers.Schedulers;
 
-import static com.eveningoutpost.dexdrip.Models.JoH.msSince;
-import static com.eveningoutpost.dexdrip.Models.JoH.ratelimit;
+import static com.eveningoutpost.dexdrip.models.JoH.msSince;
+import static com.eveningoutpost.dexdrip.models.JoH.ratelimit;
 import static com.eveningoutpost.dexdrip.insulin.pendiq.Const.INCOMING_CHAR;
 import static com.eveningoutpost.dexdrip.insulin.pendiq.Const.INSULIN_CLASSIFIER;
 import static com.eveningoutpost.dexdrip.insulin.pendiq.Const.OUTGOING_CHAR;
@@ -192,7 +196,7 @@ public class PendiqService extends JamBaseBluetoothService {
 
 
     @Override
-    protected synchronized void automata() {
+    protected synchronized boolean automata() {
 
         UserError.Log.d(TAG, "automata state: " + state);
         extendWakeLock(3000);
@@ -234,6 +238,7 @@ public class PendiqService extends JamBaseBluetoothService {
         } finally {
             //
         }
+        return true;
     }
 
 
@@ -321,7 +326,7 @@ public class PendiqService extends JamBaseBluetoothService {
     private synchronized void scan_for_device() {
         extendWakeLock((SCAN_SECONDS + 1) * Constants.SECOND_IN_MS);
         stopScan();
-        scanSubscription = rxBleClient.scanBleDevices(
+        scanSubscription = new Subscription(rxBleClient.scanBleDevices(
                 new ScanSettings.Builder()
 
                         .setCallbackType(ScanSettings.CALLBACK_TYPE_ALL_MATCHES)
@@ -333,7 +338,7 @@ public class PendiqService extends JamBaseBluetoothService {
         )
                 .timeout(SCAN_SECONDS, TimeUnit.SECONDS) // is unreliable
                 .subscribeOn(Schedulers.io())
-                .subscribe(this::onScanResult, this::onScanFailure);
+                .subscribe(this::onScanResult, this::onScanFailure));
 
         Inevitable.task("stop_pendiq_scan", SCAN_SECONDS * Constants.SECOND_IN_MS, this::stopScan);
     }
@@ -443,22 +448,22 @@ public class PendiqService extends JamBaseBluetoothService {
                 bleDevice = rxBleClient.getBleDevice(address);
 
                 /// / Listen for connection state changes
-                stateSubscription = bleDevice.observeConnectionStateChanges()
+                stateSubscription = new Subscription(bleDevice.observeConnectionStateChanges()
                         // .observeOn(AndroidSchedulers.mainThread())
                         .subscribeOn(Schedulers.io())
                         .subscribe(this::onConnectionStateChange, throwable -> {
                             UserError.Log.wtf(TAG, "Got Error from state subscription: " + throwable);
-                        });
+                        }));
 
                 // Attempt to establish a connection
-                connectionSubscription = bleDevice.establishConnection(auto)
+                connectionSubscription = new Subscription(bleDevice.establishConnection(auto)
                         .timeout(7, TimeUnit.MINUTES)
                         // .flatMap(RxBleConnection::discoverServices)
                         // .observeOn(AndroidSchedulers.mainThread())
                         // .doOnUnsubscribe(this::clearSubscription)
                         .subscribeOn(Schedulers.io())
 
-                        .subscribe(this::onConnectionReceived, this::onConnectionFailure);
+                        .subscribe(this::onConnectionReceived, this::onConnectionFailure));
 
             } else {
                 UserError.Log.wtf(TAG, "No transmitter mac address!");
@@ -531,7 +536,8 @@ public class PendiqService extends JamBaseBluetoothService {
                 //   if (d)
                 //        UserError.Log.d(TAG, "Local bonding state: " + (isDeviceLocallyBonded() ? "BONDED" : "NOT Bonded"));
                 stopDiscover();
-                discoverSubscription = connection.discoverServices(10, TimeUnit.SECONDS).subscribe(this::onServicesDiscovered, this::onDiscoverFailed);
+                discoverSubscription = new Subscription(connection.discoverServices(10, TimeUnit.SECONDS)
+                        .subscribe(this::onServicesDiscovered, this::onDiscoverFailed));
             } else {
                 UserError.Log.e(TAG, "No connection when in DISCOVER state - reset");
                 changeState(INIT);

@@ -1,10 +1,10 @@
 package com.eveningoutpost.dexdrip.calibrations;
 
-import com.eveningoutpost.dexdrip.Models.BgReading;
-import com.eveningoutpost.dexdrip.Models.JoH;
-import com.eveningoutpost.dexdrip.Models.UserError;
-import com.eveningoutpost.dexdrip.UtilityModels.Constants;
-import com.eveningoutpost.dexdrip.UtilityModels.PersistentStore;
+import com.eveningoutpost.dexdrip.models.BgReading;
+import com.eveningoutpost.dexdrip.models.JoH;
+import com.eveningoutpost.dexdrip.models.UserError;
+import com.eveningoutpost.dexdrip.utilitymodels.Constants;
+import com.eveningoutpost.dexdrip.utilitymodels.PersistentStore;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.annotations.Expose;
@@ -24,6 +24,8 @@ import java.util.Map;
 public abstract class CalibrationAbstract {
 
     private static Map<String, CalibrationData> memory_cache = new HashMap<>();
+
+    private static final double HIGHEST_SANE_INTERCEPT = 39; // max value that intercept can be with positive slope
 
     /* Overridable methods */
 
@@ -114,6 +116,7 @@ public abstract class CalibrationAbstract {
 
     public double getGlucoseFromSensorValue(double raw, CalibrationData data) {
         if (data == null) return -1;
+        if (!isCalibrationSane(data)) return -1;
         return raw * data.slope + data.intercept;
     }
 
@@ -122,6 +125,10 @@ public abstract class CalibrationAbstract {
     public double getGlucoseFromBgReading(BgReading bgReading, CalibrationData data) {
         if (data == null) return -1;
         if (bgReading == null) return -1;
+        if (!isCalibrationSane(data)) {
+            recordSanityFailure(data);
+            return -1;
+        }
         // algorithm can override to decide whether or not to be using age_adjusted_raw
         return bgReading.age_adjusted_raw_value * data.slope + data.intercept;
     }
@@ -141,11 +148,40 @@ public abstract class CalibrationAbstract {
     public double getGlucoseFromFilteredBgReading(BgReading bgReading, CalibrationData data) {
         if (data == null) return -1;
         if (bgReading == null) return -1;
+        if (!isCalibrationSane(data)) {
+            recordSanityFailure(data);
+            return -1;
+        }
         // algorithm can override to decide whether or not to be using age_adjusted_raw
         return bgReading.ageAdjustedFiltered_fast() * data.slope + data.intercept;
     }
 
+    public boolean isCalibrationSane() {
+        return isCalibrationSane(JoH.tsl());
+    }
 
+    public boolean isCalibrationSane(final long until) {
+        final CalibrationData data = getCalibrationData(until);
+        return isCalibrationSane(data);
+    }
+
+    // Check that intercept is less than the highest allowed value.
+    // This does not cater for negative slopes but they are not used by any algorithm at this point.
+    public boolean isCalibrationSane(final CalibrationData data) {
+        return data != null && !(data.intercept > HIGHEST_SANE_INTERCEPT);
+    }
+
+    private void recordSanityFailure(final CalibrationData pcalibration) {
+        if (JoH.pratelimit("best-sanity-failure", 600)) {
+            UserError.Log.wtf(getAlgorithmName(), "Unable to produce data due to plugin failing sanity check: " + pcalibration.toS());
+        }
+    }
+
+    // TODO there currently is no way to opt out of this sanity check and for performance reasons
+    // TODO we have to be careful about how one is implemented if it is needed.
+    public static double getHighestSaneIntercept() {
+        return HIGHEST_SANE_INTERCEPT;
+    }
 
     protected static CalibrationData jsonStringToData(String json) {
         try {
@@ -216,6 +252,10 @@ public abstract class CalibrationAbstract {
             this.slope = slope;
             this.intercept = intercept;
             this.created = JoH.tsl();
+        }
+
+        public String toS() {
+            return JoH.defaultGsonInstance().toJson(this);
         }
     }
 }

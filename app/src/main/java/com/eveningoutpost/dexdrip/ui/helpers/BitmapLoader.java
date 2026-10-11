@@ -8,11 +8,13 @@ import android.graphics.drawable.Drawable;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Parcel;
-import android.support.v4.graphics.drawable.DrawableCompat;
-import android.support.v7.content.res.AppCompatResources;
+
+import androidx.appcompat.content.res.AppCompatResources;
+import androidx.core.graphics.drawable.DrawableCompat;
+
 import android.util.LruCache;
 
-import com.eveningoutpost.dexdrip.Models.UserError;
+import com.eveningoutpost.dexdrip.models.UserError;
 import com.eveningoutpost.dexdrip.xdrip;
 
 import lecho.lib.hellocharts.model.PointValue;
@@ -53,7 +55,7 @@ public class BitmapLoader implements BitmapCacheProvider {
         point.setLabelBitMapKey(getCacheName(resource, rotation, 1f));
     }
 
-    private static Bitmap bitmapFromBundleCache(final String key) {
+    public static Bitmap bitmapFromBundleCache(final String key) {
         final Bundle bundle = cache.get(key);
         if (bundle != null) {
             final Bitmap result = bundle.getParcelable("bitmap");
@@ -99,7 +101,13 @@ public class BitmapLoader implements BitmapCacheProvider {
         return result;
     }
 
-    private static void saveBitmapAsBundle(String key, Bitmap bitmap) {
+    public static void deleteCacheEntry(String key) {
+        if (key != null) {
+            cache.remove(key);
+        }
+    }
+
+    public static void saveBitmapAsBundle(String key, Bitmap bitmap) {
         final Bundle bundle = new Bundle();
         bundle.putParcelable("bitmap", bitmap);
         cache.put(key, bundle);
@@ -138,8 +146,8 @@ public class BitmapLoader implements BitmapCacheProvider {
 
 
     // Accessed via interface - protect with proguard or silently fails?
-    public String getScaledKeyName(String key, final float scaler) {
-        if (scaler != 1f) {
+    public String getScaledKeyName(String key, final double scaler) {
+        if (scaler != 1d) {
             key += "-" + scaler;
         }
         return key;
@@ -152,7 +160,7 @@ public class BitmapLoader implements BitmapCacheProvider {
     }
 
     // Accessed via interface
-    public String prepareScaledBitmap(final String originalKey, final float scaler) {
+    public String prepareScaledBitmap(final String originalKey, final double scaler) {
         final String key = getScaledKeyName(originalKey, scaler);
         if (cache.get(key) == null) {
             final Bitmap discard = loadScaledBitmap(originalKey, scaler);
@@ -162,7 +170,7 @@ public class BitmapLoader implements BitmapCacheProvider {
 
     // Accessed via interface - protect with proguard or silently fails
     //  @Override
-    public Bitmap loadScaledBitmap(final String originalKey, final float scaler) {
+    public Bitmap loadScaledBitmap(final String originalKey, final double scaler) {
         String key = originalKey;
         if (scaler != 1f) {
             key += "-" + scaler;

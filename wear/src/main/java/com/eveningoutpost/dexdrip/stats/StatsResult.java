@@ -1,13 +1,11 @@
 package com.eveningoutpost.dexdrip.stats;
 
-import android.content.Context;
 import android.content.SharedPreferences;
 import android.database.Cursor;
 import android.database.sqlite.SQLiteDatabase;
-import android.preference.PreferenceManager;
 
 import com.activeandroid.Cache;
-import com.eveningoutpost.dexdrip.UtilityModels.Constants;
+import com.eveningoutpost.dexdrip.utilitymodels.Constants;
 
 import java.text.DecimalFormat;
 import java.util.Calendar;
@@ -176,15 +174,19 @@ public class StatsResult {
     public long getPossibleCaptures() {return possibleCaptures;}
 
     public String getInPercentage(){
-        return "in:" +  ((getTotalReadings()>0)?(in*100/getTotalReadings()) + "%":"-%");
+        return "in:" +  ((getTotalReadings()>0)? (100 - getHighPercentageInt() - getLowPercentageInt()) + "%":"-%");
     }
+
+    public int getLowPercentageInt() { return (int) (below * 100.0 / getTotalReadings() + 0.5);}
 
     public String getLowPercentage(){
-        return "lo:" +  ((getTotalReadings()>0)?(below*100/getTotalReadings()) + "%":"-%");
+        return "lo:" +  ((getTotalReadings()>0)? getLowPercentageInt() + "%":"-%");
     }
 
+    public int getHighPercentageInt() { return (int) (above * 100.0 / getTotalReadings() + 0.5);}
+
     public String getHighPercentage(){
-        return "hi:" +  ((getTotalReadings()>0)?(above*100/getTotalReadings()) + "%":"-%");
+        return "hi:" +  ((getTotalReadings()>0)? getHighPercentageInt() + "%":"-%");
     }
 
     public String getA1cDCCT(){

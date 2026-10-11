@@ -1,24 +1,25 @@
 package com.eveningoutpost.dexdrip;
 
 import android.content.SharedPreferences;
-import android.graphics.Color;
-import android.preference.PreferenceManager;
+import androidx.preference.PreferenceManager;
 import android.text.SpannableString;
 import android.text.style.ForegroundColorSpan;
 import android.text.style.StrikethroughSpan;
 import android.util.Log;
 
-import com.eveningoutpost.dexdrip.Models.BgReading;
-import com.eveningoutpost.dexdrip.Models.JoH;
-import com.eveningoutpost.dexdrip.Models.SensorSanity;
-import com.eveningoutpost.dexdrip.Models.UserError;
-import com.eveningoutpost.dexdrip.UtilityModels.BgGraphBuilder;
-import com.eveningoutpost.dexdrip.UtilityModels.Pref;
+import com.eveningoutpost.dexdrip.models.BgReading;
+import com.eveningoutpost.dexdrip.models.JoH;
+import com.eveningoutpost.dexdrip.models.SensorSanity;
+import com.eveningoutpost.dexdrip.models.UserError;
+import com.eveningoutpost.dexdrip.utilitymodels.BgGraphBuilder;
+import com.eveningoutpost.dexdrip.utilitymodels.ColorCache;
+import com.eveningoutpost.dexdrip.utilitymodels.Pref;
 import com.eveningoutpost.dexdrip.calibrations.CalibrationAbstract;
 import com.eveningoutpost.dexdrip.utils.DexCollectionType;
 
 import java.util.List;
 
+import static com.eveningoutpost.dexdrip.utilitymodels.ColorCache.getCol;
 import static com.eveningoutpost.dexdrip.calibrations.PluggableCalibration.getCalibrationPluginFromPreferences;
 
 /**
@@ -80,17 +81,23 @@ public class BestGlucose {
             return this.stale;
         }
 
+        // return boolean if data would be considered stale
+        public boolean isReallyStale() {
+                return this.mssince > (Home.stale_data_millis()*3);
+        }
+
+
         // is this value above the "High" preference value
         public boolean isHigh() {
             if (this.highMark == null)
-                this.highMark = JoH.tolerantParseDouble(prefs.getString("highValue", "170"));
+                this.highMark = JoH.tolerantParseDouble(prefs.getString("highValue", "170"), 170d);
             return this.unitized_value >= this.highMark;
         }
 
         // is this value below the "Low" preference value
         public boolean isLow() {
             if (this.lowMark == null)
-                this.lowMark = JoH.tolerantParseDouble(prefs.getString("lowValue", "70"));
+                this.lowMark = JoH.tolerantParseDouble(prefs.getString("lowValue", "70"), 70d);
             return this.unitized_value <= this.lowMark;
         }
 
@@ -105,11 +112,12 @@ public class BestGlucose {
             if (isStale()) wholeSpan(ret, new StrikethroughSpan());
             if (color) {
                 if (isLow()) {
-                    // TODO should colors be configurable?
-                    wholeSpan(ret, new ForegroundColorSpan(Color.parseColor("#C30909")));
+                    wholeSpan(ret, new ForegroundColorSpan(getCol(ColorCache.X.color_low_bg_values)));
                 } else if (isHigh()) {
-                    wholeSpan(ret, new ForegroundColorSpan(Color.parseColor("#FFBB33")));
-                } // else default to whatever default is?
+                    wholeSpan(ret, new ForegroundColorSpan(getCol(ColorCache.X.color_high_bg_values)));
+                } else {
+                    wholeSpan(ret, new ForegroundColorSpan(getCol(ColorCache.X.color_inrange_bg_values)));
+                }
             }
             return ret;
         }
@@ -285,7 +293,7 @@ public class BestGlucose {
         return dg;
     }
 
-    protected static boolean compensateNoise() {
+    public static boolean compensateNoise() {
         return (BgGraphBuilder.last_noise > BgGraphBuilder.NOISE_TRIGGER
                 || (BgGraphBuilder.last_noise > BgGraphBuilder.NOISE_TRIGGER_ULTRASENSITIVE
                         && Pref.getBooleanDefaultFalse("engineering_mode")

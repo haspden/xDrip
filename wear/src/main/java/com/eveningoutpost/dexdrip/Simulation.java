@@ -14,7 +14,7 @@ import android.widget.ImageButton;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import com.eveningoutpost.dexdrip.Models.JoH;
+import com.eveningoutpost.dexdrip.models.JoH;
 import com.google.android.gms.wearable.DataMap;
 
 import java.nio.charset.StandardCharsets;
@@ -26,7 +26,6 @@ import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.Date;
 import java.util.Locale;
-import java.util.Objects;
 
 import static com.eveningoutpost.dexdrip.ListenerService.SendData;
 
@@ -193,6 +192,7 @@ public class Simulation extends Activity {
                 try {
                     Bundle treatmentBundle = intent.getBundleExtra(ListenerService.WEARABLE_TREATMENT_PAYLOAD);
                     if (treatmentBundle != null) {
+// todo gruoner: extract the injectionJSON on wearable to display and approve the treatment
                         DataMap dataMap = DataMap.fromBundle(treatmentBundle);
                         if (dataMap != null) {
                             initValues();

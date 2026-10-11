@@ -1,25 +1,46 @@
 package com.eveningoutpost.dexdrip;
 
-import com.eveningoutpost.dexdrip.Models.BgReading;
-import com.eveningoutpost.dexdrip.Models.JoH;
-import com.eveningoutpost.dexdrip.Models.LibreBlock;
-import com.eveningoutpost.dexdrip.Models.UserError;
-import com.eveningoutpost.dexdrip.ShareModels.BgUploader;
-import com.eveningoutpost.dexdrip.ShareModels.Models.ShareUploadPayload;
-import com.eveningoutpost.dexdrip.UtilityModels.Notifications;
-import com.eveningoutpost.dexdrip.UtilityModels.Pref;
-import com.eveningoutpost.dexdrip.UtilityModels.pebble.PebbleUtil;
-import com.eveningoutpost.dexdrip.UtilityModels.pebble.PebbleWatchSync;
+import com.eveningoutpost.dexdrip.cloud.nightlite.NightLiteEntry;
+import com.eveningoutpost.dexdrip.models.BgReading;
+import com.eveningoutpost.dexdrip.models.JoH;
+import com.eveningoutpost.dexdrip.models.LibreBlock;
+import com.eveningoutpost.dexdrip.models.UserError;
+import com.eveningoutpost.dexdrip.receiver.InfoContentProvider;
+import com.eveningoutpost.dexdrip.sharemodels.BgUploader;
+import com.eveningoutpost.dexdrip.sharemodels.models.ShareUploadPayload;
+import com.eveningoutpost.dexdrip.utilitymodels.Inevitable;
+import com.eveningoutpost.dexdrip.utilitymodels.Notifications;
+import com.eveningoutpost.dexdrip.utilitymodels.Pref;
+import com.eveningoutpost.dexdrip.utilitymodels.VehicleMode;
+import com.eveningoutpost.dexdrip.utilitymodels.pebble.PebbleUtil;
+import com.eveningoutpost.dexdrip.utilitymodels.pebble.PebbleWatchSync;
+import com.eveningoutpost.dexdrip.healthconnect.HealthGamut;
+import com.eveningoutpost.dexdrip.healthconnect.HealthConnectEntry;
+import com.eveningoutpost.dexdrip.tidepool.TidepoolEntry;
+import com.eveningoutpost.dexdrip.ui.LockScreenWallPaper;
 import com.eveningoutpost.dexdrip.utils.BgToSpeech;
+import com.eveningoutpost.dexdrip.utils.DexCollectionType;
+import com.eveningoutpost.dexdrip.watch.lefun.LeFun;
+import com.eveningoutpost.dexdrip.watch.lefun.LeFunEntry;
+import com.eveningoutpost.dexdrip.watch.miband.MiBandEntry;
+import com.eveningoutpost.dexdrip.watch.thinjam.BlueJay;
+import com.eveningoutpost.dexdrip.watch.thinjam.BlueJayEntry;
+import com.eveningoutpost.dexdrip.watch.thinjam.BlueJayRemote;
 import com.eveningoutpost.dexdrip.wearintegration.Amazfitservice;
 import com.eveningoutpost.dexdrip.wearintegration.ExternalStatusService;
+import com.eveningoutpost.dexdrip.services.broadcastservice.BroadcastEntry;
 import com.eveningoutpost.dexdrip.wearintegration.WatchUpdaterService;
 
 import static com.eveningoutpost.dexdrip.Home.startWatchUpdaterService;
+import static com.eveningoutpost.dexdrip.utilitymodels.Constants.SECOND_IN_MS;
+
+import android.os.Build;
+
+import lombok.val;
 
 /**
  * Created by jamorham on 01/01/2018.
- *
+ * <p>
  * Handle triggering data updates on enabled modules
  */
 
@@ -27,20 +48,53 @@ public class NewDataObserver {
 
     private static final String TAG = "NewDataObserver";
 
+    private static final long ALLOWED_FUTURE_OFFSET = 20 * SECOND_IN_MS;
+
     // TODO after restructuring so that the triggering is organized by data type,
     // TODO move appropriate functions in to their responsible classes
 
     // when we receive new glucose reading we want to propagate
     public static void newBgReading(BgReading bgReading, boolean is_follower) {
+        fixFutureTime(bgReading);
 
         sendToPebble();
         sendToWear();
         sendToAmazfit();
+        sendToLeFun();
+        sendToMiBand();
+        sendToBroadcastService();
+        sendToBlueJay();
+        sendToRemoteBlueJay();
         Notifications.start();
+        InfoContentProvider.ping("bg");
         uploadToShare(bgReading, is_follower);
         textToSpeech(bgReading, null);
         LibreBlock.UpdateBgVal(bgReading.timestamp, bgReading.calculated_value);
+        LockScreenWallPaper.setIfEnabled();
+        NightLiteEntry.uploadIfEnabled();
 
+        try {
+            sendToHealthConnect(bgReading);
+        } catch (IllegalArgumentException e) {
+            UserError.Log.e(TAG, "Failed to send to HealthConnect: " + e);
+        }
+
+        TidepoolEntry.newData();
+
+    }
+
+    private static void fixFutureTime(final BgReading bgReading) {
+        if (bgReading == null) return;
+        val till = JoH.msTill(bgReading.timestamp);
+        if (till > 0) {
+            if (till < ALLOWED_FUTURE_OFFSET) {
+                UserError.Log.d(TAG, "BgReading is in the future by " + (till / 1000) + "s - timestamp adjusted");
+                bgReading.timestamp = JoH.tsl(); // TODO save??
+            } else {
+                UserError.Log.wtf(TAG, "BgReading is too far in the future the future by " + (till / 1000) + "s - skipping");
+                // TODO actually skip??
+            }
+        }
     }
 
     // when we receive a new external status broadcast
@@ -55,6 +109,7 @@ public class NewDataObserver {
             // send to pebble
             sendToPebble();
             sendToAmazfit();
+            sendStatusToBlueJay();
 
             // don't send via GCM if received via GCM!
             if (receivedLocally) {
@@ -62,6 +117,7 @@ public class NewDataObserver {
                 GcmActivity.push_external_status_update(JoH.tsl(), statusLine);
 
             }
+            InfoContentProvider.ping("status");
         }
 
     }
@@ -75,8 +131,50 @@ public class NewDataObserver {
 
     // send data to Amazfit if enabled
     private static void sendToAmazfit() {
-        if (Pref.getBooleanDefaultFalse("pref_amazfit_enable_key")) {
-            JoH.startService(Amazfitservice.class);
+        if (Pref.getBoolean("pref_amazfit_enable_key", true)) {
+            Amazfitservice.start("xDrip_synced_SGV_data");
+        }
+    }
+
+    private static void sendToLeFun() {
+        if (LeFunEntry.isEnabled()) {
+            Inevitable.task("poll-le-fun-for-bg", DexCollectionType.hasBluetooth() ? 2000 : 500, LeFun::showLatestBG); // delay enough for BT to finish on collector
+        }
+    }
+
+    private static void sendToMiBand() {
+        if (MiBandEntry.isEnabled()) {
+            Inevitable.task("poll-miband-for-bg", DexCollectionType.hasBluetooth() ? 2000 : 500, MiBandEntry::showLatestBG); // delay enough for BT to finish on collector
+        }
+    }
+
+    private static void sendToBroadcastService() {
+        BroadcastEntry.sendLatestBG();
+    }
+
+    private static void sendToBlueJay() {
+        if (BlueJayEntry.isEnabled()) {
+            Inevitable.task("poll-bluejay-for-bg", DexCollectionType.hasBluetooth() ? 2000 : 500, BlueJay::showLatestBG); // delay enough for BT to finish on collector
+        }
+    }
+
+    private static void sendStatusToBlueJay() {
+        if (BlueJayEntry.isEnabled()) {
+            Inevitable.task("poll-bluejay-for-status", 1000, BlueJay::showStatusLine);
+        }
+    }
+
+    private static void sendToRemoteBlueJay() {
+        if (BlueJayEntry.isRemoteEnabled()) {
+            Inevitable.task("poll-bluejay-remote-for-bg", DexCollectionType.hasBluetooth() ? 2000 : 500, BlueJayRemote::sendLatestBG); // delay enough for BT to finish on collector
+        }
+    }
+
+    private static void sendToHealthConnect(final BgReading bgReading) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            if (HealthConnectEntry.sendEnabled()) {
+                HealthGamut.sendGlucoseStatic(bgReading);
+            }
         }
     }
 
@@ -95,7 +193,7 @@ public class NewDataObserver {
     // speak value
     private static void textToSpeech(BgReading bgReading, BestGlucose.DisplayGlucose dg) {
         //Text to speech
-        if (Pref.getBooleanDefaultFalse("bg_to_speech")) {
+        if (Pref.getBooleanDefaultFalse("bg_to_speech") || VehicleMode.shouldSpeak()) {
             if (dg == null) dg = BestGlucose.getDisplayGlucose();
             if (dg != null) {
                 BgToSpeech.speak(dg.mgdl, dg.timestamp, dg.delta_name);

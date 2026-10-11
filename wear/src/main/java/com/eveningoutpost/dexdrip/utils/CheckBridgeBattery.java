@@ -7,13 +7,13 @@ import android.content.IntentFilter;
 import android.os.BatteryManager;
 
 import com.eveningoutpost.dexdrip.Home;
-import com.eveningoutpost.dexdrip.Models.JoH;
-import com.eveningoutpost.dexdrip.Models.UserError;
-import com.eveningoutpost.dexdrip.UtilityModels.Pref;
+import com.eveningoutpost.dexdrip.models.JoH;
+import com.eveningoutpost.dexdrip.models.UserError;
+import com.eveningoutpost.dexdrip.utilitymodels.Pref;
 import com.eveningoutpost.dexdrip.xdrip;
 
-import static com.eveningoutpost.dexdrip.Models.JoH.cancelNotification;
-import static com.eveningoutpost.dexdrip.Models.JoH.showNotification;
+import static com.eveningoutpost.dexdrip.models.JoH.cancelNotification;
+import static com.eveningoutpost.dexdrip.models.JoH.showNotification;
 
 /**
  * Created by jamorham on 26/01/2017.
@@ -58,13 +58,20 @@ public class CheckBridgeBattery {
     }
 
     public static int getBatteryLevel(Context context) {
-        Intent batteryIntent = context.registerReceiver(null, new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
-        int level = batteryIntent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1);
-        int scale = batteryIntent.getIntExtra(BatteryManager.EXTRA_SCALE, -1);
-        if (level == -1 || scale == -1) {
+        try {
+            Intent batteryIntent = context.registerReceiver(null, new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
+            int level = batteryIntent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1);
+            int scale = batteryIntent.getIntExtra(BatteryManager.EXTRA_SCALE, -1);
+            if (level == -1 || scale == -1) {
+                return 50;
+            }
+            return (int) (((float) level / (float) scale) * 100.0f);
+        } catch (NullPointerException e) {
+            if (JoH.ratelimit("battery-read-error", 3600)) {
+                UserError.Log.e(TAG, "Cannot read battery levels!");
+            }
             return 50;
         }
-        return (int) (((float) level / (float) scale) * 100.0f);
     }
 
     public static void testHarness() {

@@ -12,17 +12,17 @@ import android.database.sqlite.SQLiteException;
 import android.os.AsyncTask;
 import android.os.Bundle;
 import android.os.Handler;
-import android.support.annotation.NonNull;
-import android.support.v4.app.ActivityCompat;
-import android.support.v4.content.ContextCompat;
+import androidx.annotation.NonNull;
+import androidx.core.app.ActivityCompat;
+import androidx.core.content.ContextCompat;
 import android.util.Log;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.widget.ArrayAdapter;
 import android.widget.ListView;
 
-import com.eveningoutpost.dexdrip.Models.JoH;
-import com.eveningoutpost.dexdrip.UtilityModels.CollectionServiceStarter;
+import com.eveningoutpost.dexdrip.models.JoH;
+import com.eveningoutpost.dexdrip.utilitymodels.CollectionServiceStarter;
 import com.eveningoutpost.dexdrip.utils.DatabaseUtil;
 import com.eveningoutpost.dexdrip.utils.FileUtils;
 import com.eveningoutpost.dexdrip.utils.ListActivityWithMenu;
@@ -84,7 +84,7 @@ public class ImportDatabaseActivity extends ListActivityWithMenu {
         LayoutInflater inflater= LayoutInflater.from(this);
         View view=inflater.inflate(R.layout.import_db_warning, null);
         AlertDialog.Builder alertDialog = new AlertDialog.Builder(this);
-        alertDialog.setTitle("Import Instructions");
+        alertDialog.setTitle("Restore Instructions");
         alertDialog.setView(view);
         alertDialog.setCancelable(false);
         alertDialog.setPositiveButton(R.string.ok, new DialogInterface.OnClickListener() {
@@ -282,9 +282,8 @@ public class ImportDatabaseActivity extends ListActivityWithMenu {
 
                 if (dbFile.getAbsolutePath().endsWith(".zip")) {
                     // uncompress first
-                    try {
-                        final FileInputStream fileInputStream = new FileInputStream(dbFile.getAbsolutePath());
-                        final ZipInputStream zip_stream = new ZipInputStream(new BufferedInputStream(fileInputStream));
+                    try (final FileInputStream fileInputStream = new FileInputStream(dbFile.getAbsolutePath());
+                         final ZipInputStream zip_stream = new ZipInputStream(new BufferedInputStream(fileInputStream))) {
                         ZipEntry zipEntry = zip_stream.getNextEntry();
                         if ((zipEntry != null) && zipEntry.isDirectory())
                             zipEntry = zip_stream.getNextEntry();
@@ -292,13 +291,13 @@ public class ImportDatabaseActivity extends ListActivityWithMenu {
                             String filename = zipEntry.getName();
                             if (filename.endsWith(".sqlite")) {
                                 String output_filename = dbFile.getAbsolutePath().replaceFirst(".zip$", ".sqlite");
-                                FileOutputStream fout = new FileOutputStream(output_filename);
-                                byte[] buffer = new byte[4096];
-                                int count = 0;
-                                while ((count = zip_stream.read(buffer)) != -1) {
-                                    fout.write(buffer, 0, count);
+                                try (FileOutputStream fout = new FileOutputStream(output_filename)) {
+                                    byte[] buffer = new byte[4096];
+                                    int count;
+                                    while ((count = zip_stream.read(buffer)) != -1) {
+                                        fout.write(buffer, 0, count);
+                                    }
                                 }
-                                fout.close();
                                 dbFile = new File(output_filename);
                                 delete_file = dbFile;
                                 Log.d(TAG, "New filename: " + output_filename);
@@ -313,9 +312,6 @@ public class ImportDatabaseActivity extends ListActivityWithMenu {
                             JoH.static_toast_long(msg);
                             return msg;
                         }
-
-                            zip_stream.close();
-                            fileInputStream.close();
 
                     } catch (IOException e) {
                         String msg = "Could not open file";

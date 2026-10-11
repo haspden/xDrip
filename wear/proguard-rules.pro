@@ -53,7 +53,7 @@
 -keep class org.slf4j.** { *; }
 -keep class rx.internal.util.** { *; }
 -keep class sun.misc.Unsafe { *; }
--keep class com.eveningoutpost.dexdrip.Models.** { *; }
+-keep class com.eveningoutpost.dexdrip.models.** { *; }
 -keep class ar.com.hjg.pngj.** { *; }
 -keep class android.support.v7.widget.SearchView { *; }
 -keep class com.ustwo.clockwise.** { *; }
@@ -105,4 +105,9 @@
 -keepclassmembers class com.eveningoutpost.dexdrip.** {
    public static boolean isRunning();
    public static boolean isCollecting();
+   public static ** nanoStatus();
 }
+-keep class com.google.android.gms.measurement.AppMeasurement { *; }
+-keep class com.google.android.gms.measurement.AppMeasurement$OnEventListener { *; }
+# TODO is this not too much ?
+-keep class com.google.android.gms.** { *; }

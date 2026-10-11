@@ -3,28 +3,38 @@ package com.eveningoutpost.dexdrip;
 import android.content.Intent;
 import android.os.Bundle;
 import android.os.PowerManager;
-import android.support.v4.widget.DrawerLayout;
-import android.support.v7.app.AppCompatActivity;
+
 import android.text.TextUtils;
 import android.view.View;
 import android.widget.Button;
 import android.widget.EditText;
 
-import com.eveningoutpost.dexdrip.G5Model.Ob1G5StateMachine;
-import com.eveningoutpost.dexdrip.Models.Calibration;
-import com.eveningoutpost.dexdrip.Models.JoH;
-import com.eveningoutpost.dexdrip.Models.Sensor;
-import com.eveningoutpost.dexdrip.Models.UserError;
-import com.eveningoutpost.dexdrip.Models.UserError.Log;
-import com.eveningoutpost.dexdrip.UtilityModels.CollectionServiceStarter;
-import com.eveningoutpost.dexdrip.UtilityModels.Constants;
-import com.eveningoutpost.dexdrip.UtilityModels.PersistentStore;
-import com.eveningoutpost.dexdrip.UtilityModels.UndoRedo;
+import com.eveningoutpost.dexdrip.g5model.FirmwareCapability;
+import com.eveningoutpost.dexdrip.models.BloodTest;
+import com.eveningoutpost.dexdrip.models.Calibration;
+import com.eveningoutpost.dexdrip.models.JoH;
+import com.eveningoutpost.dexdrip.models.Sensor;
+import com.eveningoutpost.dexdrip.models.UserError;
+import com.eveningoutpost.dexdrip.models.UserError.Log;
+import com.eveningoutpost.dexdrip.utilitymodels.CollectionServiceStarter;
+import com.eveningoutpost.dexdrip.utilitymodels.Constants;
+import com.eveningoutpost.dexdrip.utilitymodels.PersistentStore;
+import com.eveningoutpost.dexdrip.utilitymodels.Pref;
+import com.eveningoutpost.dexdrip.utilitymodels.UndoRedo;
 import com.eveningoutpost.dexdrip.calibrations.NativeCalibrationPipe;
+import com.eveningoutpost.dexdrip.utils.DexCollectionType;
 
 import java.util.UUID;
 
+import static com.eveningoutpost.dexdrip.services.Ob1G5CollectionService.getTransmitterID;
+
+import androidx.appcompat.app.AppCompatActivity;
+import androidx.drawerlayout.widget.DrawerLayout;
+
 public class AddCalibration extends AppCompatActivity implements NavigationDrawerFragment.NavigationDrawerCallbacks {
+    // Unit used
+    final String unit = Pref.getString("units", "mgdl");
+
     Button button;
     private static final String TAG = "AddCalibration";
     private NavigationDrawerFragment mNavigationDrawerFragment;
@@ -42,6 +52,7 @@ public class AddCalibration extends AppCompatActivity implements NavigationDrawe
             finish();
         }
         setContentView(R.layout.activity_add_calibration);
+        JoH.fixActionBar(this);
         addListenerOnButton();
         automatedCalibration();
     }
@@ -70,7 +81,7 @@ public class AddCalibration extends AppCompatActivity implements NavigationDrawe
             if (extras != null) {
                 JoH.clearCache();
                 final String string_value = extras.getString("bg_string");
-                final String cal_source = extras.getString("cal_source","unknown");
+                final String cal_source = extras.getString("cal_source", "unknown");
                 final long timestamp = extras.getLong("timestamp", -1);
                 final String bg_age = extras.getString("bg_age");
                 final String from_external = extras.getString("from_external", "false");
@@ -117,13 +128,22 @@ public class AddCalibration extends AppCompatActivity implements NavigationDrawe
                                                     lastExternalCalibrationValue = calValue;
                                                     PersistentStore.setDouble(LAST_EXTERNAL_CALIBRATION, calValue);
                                                     UserError.Log.uel(TAG, "Creating auto calibration from: " + calValue + " requested: " + JoH.dateTimeText(timestamp) + " from source: " + cal_source);
+
+                                                    // feed calibration to native pipe without trying to create an old style calibration record
+                                                    final Double convertedBg = Calibration.getConvertedBg(calValue);
+                                                    if (convertedBg != null) {
+                                                        final long calibration_timestamp = JoH.tsl() - (bgAgeNumber * 1000);
+                                                        NativeCalibrationPipe.addCalibration(convertedBg.intValue(), calibration_timestamp);
+                                                        UserError.Log.uel(TAG, "Sending native calibration pipe value: " + convertedBg.intValue() + " mg/dl taken at timestamp: " + JoH.dateTimeText(calibration_timestamp) + " source: " + cal_source);
+                                                    }
+
                                                     final Calibration calibration = Calibration.create(calValue, bgAgeNumber, getApplicationContext(), (note_only.equals("true")), localEstimatedInterstitialLagSeconds);
-                                                    if ((calibration != null) && allow_undo.equals("true")) {
+                                                    if ((calibration != null) && allow_undo.equals("true") && (JoH.msSince(calibration.timestamp) < Constants.HOUR_IN_MS)) {
                                                         UndoRedo.addUndoCalibration(calibration.uuid);
                                                     }
                                                     if (calibration != null) {
                                                         //Ob1G5StateMachine.addCalibration((int)calibration.bg, calibration.timestamp);
-                                                        NativeCalibrationPipe.addCalibration((int)calibration.bg, calibration.timestamp);
+                                                        NativeCalibrationPipe.addCalibration((int) calibration.bg, calibration.timestamp);
                                                     }
                                                     //startWatchUpdaterService(getApplicationContext(), WatchUpdaterService.ACTION_SYNC_CALIBRATION, TAG);
                                                 } else {
@@ -187,16 +207,33 @@ public class AddCalibration extends AppCompatActivity implements NavigationDrawe
                             final double calValue = JoH.tolerantParseDouble(string_value);
 
                             if (!Home.get_follower()) {
-                                Calibration calibration = Calibration.create(calValue, getApplicationContext());
-                                if (calibration != null) {
-                                    UndoRedo.addUndoCalibration(calibration.uuid);
-                                    //startWatchUpdaterService(v.getContext(), WatchUpdaterService.ACTION_SYNC_CALIBRATION, TAG);
-                                    //Ob1G5StateMachine.addCalibration((int)calibration.bg, calibration.timestamp);
-                                    NativeCalibrationPipe.addCalibration((int)calibration.bg, calibration.timestamp);
+                                double bg = calValue;
+                                if (unit.compareTo("mgdl") != 0) {
+                                    bg = bg * Constants.MMOLL_TO_MGDL;
+                                }
+                                BloodTest.create(JoH.tsl() - (Constants.SECOND_IN_MS * 30), bg, "Add Calibration");
+                                if (DexCollectionType.hasDexcomRaw() && FirmwareCapability.isTransmitterRawIncapable(getTransmitterID())) { // Firefly only
+
+                                    JoH.clearCache();
+                                    final Calibration Calibration = new Calibration();
+                                    final Sensor sensor = Sensor.currentSensor();
+                                    JoH.static_toast_long("Sending Blood Test to Transmitter");
+
+                                    if (!Pref.getBooleanDefaultFalse("bluetooth_meter_for_calibrations_auto")) {
+                                        NativeCalibrationPipe.addCalibration((int) bg, JoH.tsl() - (Constants.SECOND_IN_MS * 30));
+                                    }
                                 } else {
-                                    Log.e(TAG, "Calibration creation resulted in null");
-                                    JoH.static_toast_long("Could not create calibration!");
-                                    // TODO probably follower must ensure it has a valid sensor regardless..
+                                    Calibration calibration = Calibration.create(calValue, getApplicationContext());
+                                    if (calibration != null) {
+                                        UndoRedo.addUndoCalibration(calibration.uuid);
+                                        //startWatchUpdaterService(v.getContext(), WatchUpdaterService.ACTION_SYNC_CALIBRATION, TAG);
+                                        //Ob1G5StateMachine.addCalibration((int)calibration.bg, calibration.timestamp);
+                                        NativeCalibrationPipe.addCalibration((int) calibration.bg, calibration.timestamp);
+                                    } else {
+                                        Log.e(TAG, "Calibration creation resulted in null");
+                                        JoH.static_toast_long("Could not create calibration!");
+                                        // TODO probably follower must ensure it has a valid sensor regardless..
+                                    }
                                 }
                             } else if (Home.get_follower()) {
                                 // Sending the data for the master to update the main tables.
@@ -209,8 +246,6 @@ public class AddCalibration extends AppCompatActivity implements NavigationDrawe
                             Log.e(TAG, "Number format exception ", e);
                             Home.toaststatic("Got error parsing number in calibration");
                         }
-                        // }
-                        // }.start();
                         finish();
                     } else {
                         value.setError("Calibration Can Not be blank");

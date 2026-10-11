@@ -4,6 +4,7 @@ import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.DialogInterface;
 
+import com.eveningoutpost.dexdrip.models.UserError;
 import com.eveningoutpost.dexdrip.R;
 
 // jamorham
@@ -12,7 +13,7 @@ import com.eveningoutpost.dexdrip.R;
 
 public class DidYouCancelAlarm {
 
-    public static void dialog(final Activity activity, Runnable runnable) {
+    public static synchronized void dialog(final Activity activity, Runnable runnable) {
 
         final AlertDialog.Builder builder = new AlertDialog.Builder(activity);
         builder.setTitle(R.string.cancel_alarm);
@@ -41,6 +42,10 @@ public class DidYouCancelAlarm {
         } catch (Exception e) {
             //
         }
-        dialog.show();
+        try {
+            dialog.show();
+        } catch (Exception e) {
+            UserError.Log.wtf(DidYouCancelAlarm.class.getSimpleName(), "Unable to show dialog: " + e);
+        }
     }
 }

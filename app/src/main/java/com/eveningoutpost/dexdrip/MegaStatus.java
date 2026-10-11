@@ -6,9 +6,17 @@ package com.eveningoutpost.dexdrip;
  * Multi-page plugin style status entry lists
  */
 
+import static com.eveningoutpost.dexdrip.Home.startWatchUpdaterService;
+import static com.eveningoutpost.dexdrip.utils.DexCollectionType.DexcomG5;
+import static com.eveningoutpost.dexdrip.utils.DexCollectionType.GluPro;
+import static com.eveningoutpost.dexdrip.utils.DexCollectionType.Medtrum;
+import static com.eveningoutpost.dexdrip.utils.DexCollectionType.NSFollow;
+import static com.eveningoutpost.dexdrip.utils.DexCollectionType.SHFollow;
+import static com.eveningoutpost.dexdrip.utils.DexCollectionType.WebFollow;
+import static com.eveningoutpost.dexdrip.utils.DexCollectionType.CLFollow;
+
 import android.app.Activity;
-import android.app.Fragment;
-import android.app.FragmentManager;
+
 import android.app.PendingIntent;
 import android.content.BroadcastReceiver;
 import android.content.Context;
@@ -16,50 +24,69 @@ import android.content.Intent;
 import android.content.IntentFilter;
 import android.graphics.Color;
 import android.os.Bundle;
-import android.support.v13.app.FragmentStatePagerAdapter;
-import android.support.v4.content.LocalBroadcastManager;
-import android.support.v4.view.ViewPager;
+
+import androidx.fragment.app.Fragment;
+import androidx.fragment.app.FragmentManager;
+import androidx.fragment.app.FragmentStatePagerAdapter;
+import androidx.localbroadcastmanager.content.LocalBroadcastManager;
+import androidx.viewpager.widget.ViewPager;
+
 import android.view.Gravity;
 import android.view.LayoutInflater;
 import android.view.Menu;
 import android.view.MenuItem;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.WindowManager;
 import android.widget.BaseAdapter;
+import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.ListView;
 import android.widget.TextView;
 
-import com.eveningoutpost.dexdrip.Models.JoH;
-import com.eveningoutpost.dexdrip.Models.RollCall;
-import com.eveningoutpost.dexdrip.Models.UserError;
-import com.eveningoutpost.dexdrip.Services.DexCollectionService;
-import com.eveningoutpost.dexdrip.Services.DoNothingService;
-import com.eveningoutpost.dexdrip.Services.G5CollectionService;
-import com.eveningoutpost.dexdrip.Services.Ob1G5CollectionService;
-import com.eveningoutpost.dexdrip.Services.WifiCollectionService;
-import com.eveningoutpost.dexdrip.UtilityModels.JamorhamShowcaseDrawer;
-import com.eveningoutpost.dexdrip.UtilityModels.PersistentStore;
-import com.eveningoutpost.dexdrip.UtilityModels.Pref;
-import com.eveningoutpost.dexdrip.UtilityModels.ShotStateStore;
-import com.eveningoutpost.dexdrip.UtilityModels.StatusItem;
-import com.eveningoutpost.dexdrip.UtilityModels.UploaderQueue;
+import com.eveningoutpost.dexdrip.cgm.glupro.GluProService;
+import com.eveningoutpost.dexdrip.models.DesertSync;
+import com.eveningoutpost.dexdrip.models.JoH;
+import com.eveningoutpost.dexdrip.models.RollCall;
+import com.eveningoutpost.dexdrip.models.UserError;
+import com.eveningoutpost.dexdrip.services.DexCollectionService;
+import com.eveningoutpost.dexdrip.services.DoNothingService;
+import com.eveningoutpost.dexdrip.services.G5CollectionService;
+import com.eveningoutpost.dexdrip.services.Ob1G5CollectionService;
+import com.eveningoutpost.dexdrip.services.WifiCollectionService;
+import com.eveningoutpost.dexdrip.ui.helpers.FloatingLocaleActivityWithScreenshot;
+import com.eveningoutpost.dexdrip.utilitymodels.JamorhamShowcaseDrawer;
+import com.eveningoutpost.dexdrip.utilitymodels.PersistentStore;
+import com.eveningoutpost.dexdrip.utilitymodels.Pref;
+import com.eveningoutpost.dexdrip.utilitymodels.ShotStateStore;
+import com.eveningoutpost.dexdrip.utilitymodels.StatusItem;
+import com.eveningoutpost.dexdrip.utilitymodels.UploaderQueue;
 import com.eveningoutpost.dexdrip.cgm.medtrum.MedtrumCollectionService;
-import com.eveningoutpost.dexdrip.utils.ActivityWithMenu;
+import com.eveningoutpost.dexdrip.cgm.nsfollow.NightscoutFollowService;
+import com.eveningoutpost.dexdrip.cgm.sharefollow.ShareFollowService;
+import com.eveningoutpost.dexdrip.cgm.webfollow.WebFollowService;
+import com.eveningoutpost.dexdrip.cgm.carelinkfollow.CareLinkFollowService;
+import com.eveningoutpost.dexdrip.insulin.inpen.InPenEntry;
+import com.eveningoutpost.dexdrip.insulin.inpen.InPenService;
 import com.eveningoutpost.dexdrip.utils.DexCollectionType;
+import com.eveningoutpost.dexdrip.watch.lefun.LeFunEntry;
+import com.eveningoutpost.dexdrip.watch.lefun.LeFunService;
+import com.eveningoutpost.dexdrip.watch.miband.MiBandEntry;
+import com.eveningoutpost.dexdrip.watch.miband.MiBandService;
+import com.eveningoutpost.dexdrip.watch.thinjam.BlueJayEntry;
+import com.eveningoutpost.dexdrip.watch.thinjam.BlueJayService;
 import com.eveningoutpost.dexdrip.wearintegration.WatchUpdaterService;
 import com.github.amlcurran.showcaseview.ShowcaseView;
 import com.github.amlcurran.showcaseview.targets.ViewTarget;
 import com.google.android.gms.wearable.DataMap;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 
-import static com.eveningoutpost.dexdrip.Home.startWatchUpdaterService;
-import static com.eveningoutpost.dexdrip.utils.DexCollectionType.DexcomG5;
-import static com.eveningoutpost.dexdrip.utils.DexCollectionType.Medtrum;
+import lombok.val;
 
-public class MegaStatus extends ActivityWithMenu {
+public class MegaStatus extends FloatingLocaleActivityWithScreenshot {
 
 
     private static Activity mActivity;
@@ -77,6 +104,7 @@ public class MegaStatus extends ActivityWithMenu {
 
     private static final ArrayList<String> sectionList = new ArrayList<>();
     private static final ArrayList<String> sectionTitles = new ArrayList<>();
+    private static final HashSet<String> sectionAlwaysOn = new HashSet<>(); //While viewing these pages, the screen won't time out.
 
     public static View runnableView;
 
@@ -96,11 +124,27 @@ public class MegaStatus extends ActivityWithMenu {
     }
 
     private static final String G4_STATUS = "BT Device";
-    private static final String G5_STATUS = "G5/G6 Status";
+    public static final String G5_STATUS = "Dex Status";
     private static final String MEDTRUM_STATUS = "Medtrum Status";
     private static final String IP_COLLECTOR = "IP Collector";
     private static final String XDRIP_PLUS_SYNC = "Followers";
     private static final String UPLOADERS = "Uploaders";
+    private static final String LEFUN_STATUS = "Lefun";
+    private static final String MIBAND_STATUS = "MiBand";
+    private static final String BLUEJAY_STATUS = "BlueJay";
+    private static final String INPEN_STATUS = "InPen";
+    private static final String NIGHTSCOUT_FOLLOW = "Nightscout Follow";
+    private static final String SHARE_FOLLOW = "Dex Share Follow";
+    private static final String WEB_FOLLOW = "Web Follower";
+    private static final String CARELINK_FOLLOW = "CareLink Follow";
+    public static final String GLU_PRO = "Smart Guide";
+    private static final String XDRIP_LIBRE2 = "Libre2";
+
+
+    static {
+        sectionAlwaysOn.add(G5_STATUS);
+        sectionAlwaysOn.add(GLU_PRO);
+    }
 
     public static PendingIntent getStatusPendingIntent(String section_name) {
         final Intent intent = new Intent(xdrip.getAppContext(), MegaStatus.class);
@@ -108,7 +152,17 @@ public class MegaStatus extends ActivityWithMenu {
         return PendingIntent.getActivity(xdrip.getAppContext(), 0, intent, android.app.PendingIntent.FLAG_UPDATE_CURRENT);
     }
 
+    public static void startStatus(String section_name) {
+        try {
+            getStatusPendingIntent(section_name).send();
+        } catch (PendingIntent.CanceledException e) {
+            UserError.Log.e(TAG, "Unable to start status: " + e);
+        }
+    }
+
     private void populateSectionList() {
+
+        // TODO extract descriptions to resource strings
 
         if (sectionList.isEmpty()) {
 
@@ -121,25 +175,52 @@ public class MegaStatus extends ActivityWithMenu {
                 addAsection(G4_STATUS, "Bluetooth Collector Status");
             }
             if (dexCollectionType.equals(DexcomG5)) {
-                if (Pref.getBooleanDefaultFalse(Ob1G5CollectionService.OB1G5_PREFS)) {
-                    addAsection(G5_STATUS, "OB1 G5/G6 Collector and Transmitter Status");
-                } else {
-                    addAsection(G5_STATUS, "G5 Collector and Transmitter Status");
-                }
+                addAsection(G5_STATUS, "Dex Collector/Transmitter Status");
             } else if (dexCollectionType.equals(Medtrum)) {
                 addAsection(MEDTRUM_STATUS, "Medtrum A6 Status");
             }
+            if (dexCollectionType.equals(GluPro)) {
+                addAsection(GLU_PRO, getString(R.string.glupro_status));
+            }
+            if (BlueJayEntry.isEnabled()) {
+                addAsection(BLUEJAY_STATUS, "BlueJay Watch Status");
+            }
+            if (DexCollectionType.getDexCollectionType() == DexCollectionType.LibreReceiver) {
+                addAsection(XDRIP_LIBRE2, "Libre Patched App Status");
+            }
             if (DexCollectionType.hasWifi()) {
-                addAsection(IP_COLLECTOR, dexCollectionType == DexCollectionType.Mock ? "FAKE / MOCK DATA SOURCE" : "Wifi Wixel / Parakeet Status");
+                addAsection(IP_COLLECTOR, dexCollectionType == DexCollectionType.Mock ? "FAKE / MOCK DATA SOURCE" : "Wifi Wixel Status");
+            }
+            if (InPenEntry.isEnabled()) {
+                addAsection(INPEN_STATUS,"InPen Status");
             }
             if (Home.get_master_or_follower()) {
-                addAsection(XDRIP_PLUS_SYNC, "xDrip+ Sync Group");
+                addAsection(XDRIP_PLUS_SYNC, "xDrip Sync Group");
             }
             if (Pref.getBooleanDefaultFalse("cloud_storage_mongodb_enable")
                     || Pref.getBooleanDefaultFalse("cloud_storage_api_enable")
+                    || Pref.getBooleanDefaultFalse("cloud_storage_tidepool_enable")
                     || Pref.getBooleanDefaultFalse("share_upload")
                     || (Pref.getBooleanDefaultFalse("wear_sync") && Home.get_engineering_mode())) {
                 addAsection(UPLOADERS, "Cloud Uploader Queues");
+            }
+            if (LeFunEntry.isEnabled()) {
+                addAsection(LEFUN_STATUS, "Lefun Watch Status");
+            }
+            if (MiBandEntry.isEnabled()) {
+                addAsection(MIBAND_STATUS, "MiBand Watch Status");
+            }
+            if(dexCollectionType.equals(NSFollow)) {
+                addAsection(NIGHTSCOUT_FOLLOW, "Nightscout Follow Status");
+            }
+            if(dexCollectionType.equals(SHFollow)) {
+                addAsection(SHARE_FOLLOW, "Dex Share Follow Status");
+            }
+            if(dexCollectionType.equals(WebFollow)) {
+                addAsection(WEB_FOLLOW, "Web Follower Status");
+            }
+            if(dexCollectionType.equals(CLFollow)) {
+                addAsection(CARELINK_FOLLOW, "CareLink Follow Status");
             }
 
             //addAsection("Misc", "Currently Empty");
@@ -177,10 +258,41 @@ public class MegaStatus extends ActivityWithMenu {
             case XDRIP_PLUS_SYNC:
                 la.addRows(DoNothingService.megaStatus());
                 la.addRows(GcmListenerSvc.megaStatus());
+                la.addRows(DesertSync.megaStatus());
                 la.addRows(RollCall.megaStatus());
                 break;
             case UPLOADERS:
                 la.addRows(UploaderQueue.megaStatus());
+                break;
+            case LEFUN_STATUS:
+                la.addRows(LeFunService.megaStatus());
+                break;
+            case MIBAND_STATUS:
+                la.addRows(MiBandService.megaStatus());
+                break;
+            case BLUEJAY_STATUS:
+                la.addRows(BlueJayService.megaStatus());
+                break;
+            case INPEN_STATUS:
+                la.addRows(InPenService.megaStatus());
+                break;
+            case NIGHTSCOUT_FOLLOW:
+                la.addRows(NightscoutFollowService.megaStatus());
+                break;
+            case SHARE_FOLLOW:
+                la.addRows(ShareFollowService.megaStatus());
+                break;
+            case WEB_FOLLOW:
+                la.addRows(WebFollowService.megaStatus());
+                break;
+            case CARELINK_FOLLOW:
+                la.addRows(CareLinkFollowService.megaStatus());
+                break;
+            case GLU_PRO:
+                la.addRows(GluProService.megaStatus());
+                break;
+            case XDRIP_LIBRE2:
+                la.addRows(LibreReceiver.megaStatus());
                 break;
         }
         la.changed();
@@ -203,7 +315,7 @@ public class MegaStatus extends ActivityWithMenu {
         sectionTitles.clear();
         populateSectionList();
 
-        mSectionsPagerAdapter = new SectionsPagerAdapter(getFragmentManager());
+        mSectionsPagerAdapter = new SectionsPagerAdapter(getSupportFragmentManager());
 
         mViewPager = (ViewPager) findViewById(R.id.container);
         mViewPager.setAdapter(mSectionsPagerAdapter);
@@ -222,6 +334,7 @@ public class MegaStatus extends ActivityWithMenu {
             currentPage = saved_position;
             mViewPager.setCurrentItem(saved_position);
             autoStart = true; // run once activity becomes visible
+            keepScreenOn(sectionAlwaysOn.contains(sectionList.get(currentPage)));
         }
         mViewPager.addOnPageChangeListener(new ViewPager.SimpleOnPageChangeListener() {
             @Override
@@ -230,6 +343,7 @@ public class MegaStatus extends ActivityWithMenu {
                 runnableView = null;
                 currentPage = position;
                 startAutoFresh();
+                keepScreenOn(sectionAlwaysOn.contains(sectionList.get(currentPage)));
                 PersistentStore.setLong("mega-status-last-page", currentPage);
             }
         });
@@ -272,6 +386,35 @@ public class MegaStatus extends ActivityWithMenu {
                 }
             }
         };
+
+        try {
+            getSupportActionBar().setSubtitle(BuildConfig.VERSION_NAME);
+            fixElipsusAndSize(null);
+        } catch (Exception e) {
+            UserError.Log.e(TAG, "Got exception trying to set subtitle: ", e);
+        }
+    }
+
+    private void fixElipsusAndSize(ViewGroup root) {
+        if (root == null)
+            root = (ViewGroup) getWindow().getDecorView().findViewById(android.R.id.content).getRootView();
+        final int children = root.getChildCount();
+        for (int i = 0; i < children; i++) {
+            final View view = root.getChildAt(i);
+            if (view instanceof TextView) {
+                final String txt = ((TextView) view).getText().toString();
+                if (txt.contains(BuildConfig.VERSION_NAME)) {
+                    ((TextView) view).setEllipsize(null);
+                    final float tsize = ((TextView) view).getTextSize();
+                    if (tsize > 10f) {
+                        ((TextView) view).setTextSize(Math.max(10f, tsize / 4));
+                    }
+                    return;
+                }
+            } else if (view instanceof ViewGroup) {
+                fixElipsusAndSize((ViewGroup) view);
+            }
+        }
     }
 
     private void requestWearCollectorStatus() {
@@ -319,7 +462,10 @@ public class MegaStatus extends ActivityWithMenu {
     @Override
     public boolean onCreateOptionsMenu(Menu menu) {
         // Inflate the menu; this adds items to the action bar if it is present.
-        //getMenuInflater().inflate(R.menu.menu_mega_status, menu);
+        if (FloatingLocaleActivityWithScreenshot.localeString == null) {
+            // only if we are not forced to a locale
+            getMenuInflater().inflate(R.menu.menu_mega_status, menu);
+        }
         return true;
     }
 
@@ -331,7 +477,13 @@ public class MegaStatus extends ActivityWithMenu {
         int id = item.getItemId();
 
         //noinspection SimplifiableIfStatement
-        if (id == R.id.action_settings) {
+        if (id == R.id.action_screenshot) {
+            val lang = "en"; // force in this language
+            val intent = JoH.getStartActivityIntent(MegaStatus.class);
+            intent.putExtra(FORCE_ACTIVITY_LANGUAGE,lang);
+            intent.putExtra(SCREENSHOT_AND_EXIT, true);
+            FloatingLocaleActivityWithScreenshot.localeString = lang;
+            xdrip.getAppContext().startActivity(intent);
             return true;
         }
 
@@ -369,6 +521,18 @@ public class MegaStatus extends ActivityWithMenu {
                                      }
                                  }
                 , 1500);
+    }
+
+    private void keepScreenOn(boolean on) {
+        try {
+            if (on) {
+                getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+            } else {
+                getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+            }
+        } catch (Exception e) {
+            UserError.Log.d(TAG, "Exception setting window flags: " + e);
+        }
     }
 
     private synchronized void startAutoFresh() {
@@ -469,6 +633,7 @@ public class MegaStatus extends ActivityWithMenu {
         TextView name;
         TextView value;
         TextView spacer;
+        Button button;
         LinearLayout layout;
     }
 
@@ -528,6 +693,7 @@ public class MegaStatus extends ActivityWithMenu {
                 viewHolder = new ViewHolder();
                 view = mInflator.inflate(R.layout.listitem_megastatus, null);
                 viewHolder.value = (TextView) view.findViewById(R.id.value);
+                viewHolder.button = (Button) view.findViewById(R.id.button);
                 viewHolder.name = (TextView) view.findViewById(R.id.name);
                 viewHolder.spacer = (TextView) view.findViewById(R.id.spacer);
                 viewHolder.layout = (LinearLayout) view.findViewById(R.id.device_list_id);
@@ -547,6 +713,7 @@ public class MegaStatus extends ActivityWithMenu {
                 viewHolder.spacer.setVisibility(View.VISIBLE);
                 viewHolder.name.setVisibility(View.VISIBLE);
                 viewHolder.value.setVisibility(View.VISIBLE);
+                viewHolder.button.setVisibility(View.GONE);
                 viewHolder.name.setTextColor(color_store1);
                 viewHolder.layout.setPadding(padding_store_left_1, padding_store_top_1, padding_store_right_1, padding_store_bottom_1);
                 viewHolder.name.setGravity(gravity_store_1);
@@ -573,29 +740,12 @@ public class MegaStatus extends ActivityWithMenu {
                 viewHolder.name.setText(row.name);
                 viewHolder.value.setText(row.value);
 
-                int new_colour = -1;
-                switch (row.highlight) {
-                    case BAD:
-                        new_colour = Color.parseColor("#480000");
-                        break;
-                    case NOTICE:
-                        new_colour = Color.parseColor("#403000");
-                        break;
-                    case GOOD:
-                        new_colour = Color.parseColor("#003000");
-                        break;
-                    case CRITICAL:
-                        new_colour = Color.parseColor("#770000");
-                        break;
-                    default:
-                        new_colour = Color.TRANSPARENT;
-                        break;
-                }
-                if (new_colour != -1) {
-                    viewHolder.value.setBackgroundColor(new_colour);
-                    viewHolder.spacer.setBackgroundColor(new_colour);
-                    viewHolder.name.setBackgroundColor(new_colour);
-                }
+                final int new_colour = row.highlight.color();
+                //if (new_colour != -1) {
+                viewHolder.value.setBackgroundColor(new_colour);
+                viewHolder.spacer.setBackgroundColor(new_colour);
+                viewHolder.name.setBackgroundColor(new_colour);
+                //}
                 view.setOnClickListener(null); // reset
                 if ((row.runnable != null) && (row.button_name != null) && (row.button_name.equals("long-press"))) {
                     runnableView = view; // last one
@@ -611,17 +761,38 @@ public class MegaStatus extends ActivityWithMenu {
                             return true;
                         }
                     });*/
-                    view.setOnClickListener(new View.OnClickListener() {
-                        @Override
-                        public void onClick(View v) {
+                    view.setOnClickListener(v -> {
+                        try {
+                            runOnUiThread(row.runnable);
+                        } catch (Exception e) {
+                            //
+                        }
+
+                    });
+
+                } else if ((row.runnable != null) && (row.button_name != null) && (row.button_name.equals("button-press"))) {
+                        runnableView = view; // last one
+                        viewHolder.button.setText(row.value);
+                        viewHolder.value.setVisibility(View.GONE);
+                        viewHolder.button.setVisibility(View.VISIBLE);
+                        viewHolder.button.setOnClickListener(v -> {
+                            try {
+                                runOnUiThread(row.runnable);
+                            } catch (Exception e) {
+                                //
+                            }
+                        });
+
+                        view.setOnClickListener(v -> {
                             try {
                                 runOnUiThread(row.runnable);
                             } catch (Exception e) {
                                 //
                             }
 
-                        }
-                    });
+                        });
+
+
                 } else {
                     view.setLongClickable(false);
                 }

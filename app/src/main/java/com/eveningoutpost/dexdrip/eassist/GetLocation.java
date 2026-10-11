@@ -8,11 +8,11 @@ import android.location.Address;
 import android.location.Geocoder;
 import android.location.Location;
 import android.os.Looper;
-import android.support.v4.app.ActivityCompat;
+import androidx.core.app.ActivityCompat;
 
-import com.eveningoutpost.dexdrip.Models.JoH;
-import com.eveningoutpost.dexdrip.Models.UserError;
-import com.eveningoutpost.dexdrip.UtilityModels.Inevitable;
+import com.eveningoutpost.dexdrip.models.JoH;
+import com.eveningoutpost.dexdrip.models.UserError;
+import com.eveningoutpost.dexdrip.utilitymodels.Inevitable;
 import com.eveningoutpost.dexdrip.xdrip;
 import com.google.android.gms.common.api.GoogleApiClient;
 import com.google.android.gms.location.LocationCallback;
@@ -106,33 +106,37 @@ public class GetLocation {
 
 
         final Runnable runnable = () -> {
-            @SuppressLint("MissingPermission") final Location location = LocationServices.FusedLocationApi.getLastLocation(mApiClient);
-            if (location != null) {
-                lastLocation = location;
-                UserError.Log.d(TAG, location.toString());
-                lastAddress = getStreetLocation(location.getLatitude(), location.getLongitude());
-                UserError.Log.d(TAG, "Address: " + lastAddress);
-                addressUpdated = JoH.tsl();
+            if (mApiClient.isConnected()) {
+                @SuppressLint("MissingPermission") final Location location = LocationServices.FusedLocationApi.getLastLocation(mApiClient);
+                if (location != null) {
+                    lastLocation = location;
+                    UserError.Log.d(TAG, location.toString());
+                    lastAddress = getStreetLocation(location.getLatitude(), location.getLongitude());
+                    UserError.Log.d(TAG, "Address: " + lastAddress);
+                    addressUpdated = JoH.tsl();
 
-                if (ActivityCompat.checkSelfPermission(xdrip.getAppContext(), Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED
-                        && ActivityCompat.checkSelfPermission(xdrip.getAppContext(), Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
-                    UserError.Log.wtf(TAG, "Could not determine location as permission has been removed!");
-                    return;
+                    if (ActivityCompat.checkSelfPermission(xdrip.getAppContext(), Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED
+                            && ActivityCompat.checkSelfPermission(xdrip.getAppContext(), Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+                        UserError.Log.wtf(TAG, "Could not determine location as permission has been removed!");
+                        return;
+                    }
+
+                    final LocationCallback callback = getLocationCallback();
+
+                    Inevitable.task("update gps location", 200, () -> {
+                        UserError.Log.d(TAG, "Requesting live GPS updates");
+                        LocationServices.FusedLocationApi.requestLocationUpdates(mApiClient,
+                                getLocationRequest(), callback, Looper.getMainLooper());
+                    });
+                    Inevitable.task("remove gps updates " + JoH.tsl(), GPS_ACTIVE_TIME,
+                            () -> LocationServices.FusedLocationApi.removeLocationUpdates(mApiClient, callback));
+
+                } else {
+                    UserError.Log.e(TAG, "Location result was null");
+                    // TODO retry ?
                 }
-
-                final LocationCallback callback = getLocationCallback();
-
-                Inevitable.task("update gps location", 200, () -> {
-                    UserError.Log.d(TAG, "Requesting live GPS updates");
-                    LocationServices.FusedLocationApi.requestLocationUpdates(mApiClient,
-                            getLocationRequest(), callback, Looper.getMainLooper());
-                });
-                Inevitable.task("remove gps updates " + JoH.tsl(), GPS_ACTIVE_TIME,
-                        () -> LocationServices.FusedLocationApi.removeLocationUpdates(mApiClient, callback));
-
             } else {
-                UserError.Log.e(TAG, "Location result was null");
-                // TODO retry ?
+                UserError.Log.e(TAG, "Could not connect google api");
             }
         };
 

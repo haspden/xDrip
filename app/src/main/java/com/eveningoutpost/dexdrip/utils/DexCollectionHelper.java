@@ -1,23 +1,25 @@
 package com.eveningoutpost.dexdrip.utils;
 
 import android.app.Activity;
-import android.app.AlertDialog;
-import android.content.DialogInterface;
 import android.content.Intent;
 import android.text.InputType;
-import android.view.View;
-import android.widget.EditText;
-import android.widget.TextView;
 
 import com.eveningoutpost.dexdrip.BluetoothScan;
 import com.eveningoutpost.dexdrip.Home;
-import com.eveningoutpost.dexdrip.Models.ActiveBluetoothDevice;
-import com.eveningoutpost.dexdrip.Models.UserError;
+import com.eveningoutpost.dexdrip.models.ActiveBluetoothDevice;
 import com.eveningoutpost.dexdrip.R;
-import com.eveningoutpost.dexdrip.Services.Ob1G5CollectionService;
-import com.eveningoutpost.dexdrip.UtilityModels.CollectionServiceStarter;
-import com.eveningoutpost.dexdrip.UtilityModels.Pref;
+import com.eveningoutpost.dexdrip.models.UserError;
+import com.eveningoutpost.dexdrip.services.Ob1G5CollectionService;
+import com.eveningoutpost.dexdrip.utilitymodels.CollectionServiceStarter;
+import com.eveningoutpost.dexdrip.utilitymodels.Pref;
+import com.eveningoutpost.dexdrip.cgm.sharefollow.ShareFollowService;
+import com.eveningoutpost.dexdrip.cgm.carelinkfollow.CareLinkFollowService;
+import com.eveningoutpost.dexdrip.plugin.Dialog;
 import com.eveningoutpost.dexdrip.xdrip;
+
+import static com.eveningoutpost.dexdrip.services.Ob1G5CollectionService.clearDataWhenTransmitterIdEntered;
+import static com.eveningoutpost.dexdrip.ui.dialog.QuickSettingsDialogs.booleanSettingDialog;
+import static com.eveningoutpost.dexdrip.ui.dialog.QuickSettingsDialogs.textSettingDialog;
 
 /**
  * Created by jamorham on 02/03/2018.
@@ -26,9 +28,9 @@ import com.eveningoutpost.dexdrip.xdrip;
 public class DexCollectionHelper {
 
     private static final String TAG = DexCollectionHelper.class.getSimpleName();
-    private static AlertDialog dialog;
 
-    public static void assistance(Activity activity, DexCollectionType type) {
+
+    public static void assistance(final Activity activity, DexCollectionType type) {
 
         switch (type) {
 
@@ -40,17 +42,25 @@ public class DexCollectionHelper {
                 // intentional fall thru
 
             case DexcomG5:
+                final String pref = "dex_txid";
                 textSettingDialog(activity,
-                        "dex_txid", activity.getString(R.string.dexcom_transmitter_id),
+                        pref, activity.getString(R.string.dexcom_transmitter_id),
                         activity.getString(R.string.enter_your_transmitter_id_exactly),
-                        InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS | InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS | InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD,
-                        new Runnable() {
-                            @Override
-                            public void run() {
+                        DexCollectionType.isG7()
+                        ? InputType.TYPE_CLASS_NUMBER // g7 numbers only
+                        : InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS | InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS | InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD,
+                        () -> {
+                            // InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS does not seem functional here
+                            Pref.setString(pref, Pref.getString(pref, "").toUpperCase());
+                            if (!Dialog.askIfNeeded(activity, Pref.getString(pref, ""))) {
                                 Home.staticRefreshBGCharts();
-                                CollectionServiceStarter.restartCollectionServiceBackground();
                             }
-                        });
+
+                            clearDataWhenTransmitterIdEntered(Pref.getString(pref, ""));
+
+                            CollectionServiceStarter.restartCollectionServiceBackground();
+                            LocationHelper.requestLocationForBluetooth(activity);
+                        }, true);
                 break;
 
             case DexbridgeWixel:
@@ -58,39 +68,107 @@ public class DexCollectionHelper {
                         "dex_txid", activity.getString(R.string.dexcom_transmitter_id),
                         activity.getString(R.string.enter_your_transmitter_id_exactly),
                         InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS | InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS | InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD,
+                        DexCollectionHelper::bluetoothScanIfNeeded);
+                break;
+
+
+            case NSFollow:
+                textSettingDialog(activity,
+                        "nsfollow_url", "Nightscout Follow URL",
+                        "Web address for following",
+                        InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS | InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD,
+                        () -> {
+                            Home.staticRefreshBGCharts();
+                            CollectionServiceStarter.restartCollectionServiceBackground();
+                        });
+                break;
+
+            case SHFollow:
+                textSettingDialog(activity,
+                        "shfollow_user", "Dex Share Username",
+                        "Enter Share Follower Username",
+                        InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS | InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD | InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS,
+                        () -> textSettingDialog(activity,
+                                "shfollow_pass", "Dex Share Password",
+                                "Enter Share Follower Password",
+                                InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS | InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD,
+                                () -> booleanSettingDialog(activity,
+                                        "dex_share_us_acct", "Select Servers", "My account is on USA servers", "Select whether using USA or rest-of-world account",
+                                        () -> {
+                                            Home.staticRefreshBGCharts();
+                                            ShareFollowService.resetInstanceAndInvalidateSession();
+                                            CollectionServiceStarter.restartCollectionServiceBackground();
+                                        })));
+                break;
+
+            case LimiTTer:
+            case BluetoothWixel:
+            case DexcomShare:
+            case Medtrum:
+                bluetoothScanIfNeeded();
+                break;
+            case LibreReceiver:
+                Home.staticRefreshBGChartsOnIdle();
+                break;
+
+            default:
+                UserError.Log.d(TAG, "Default case in assistance - restarting collection service");
+                CollectionServiceStarter.restartCollectionServiceBackground();
+                break;
+            /* LOGIN via browser is required currently
+            case CLFollow:
+                textSettingDialog(activity,
+                        "clfollow_country", "CareLink Country",
+                        "Two letter country ISO code",
+                        InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS | InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD,
                         new Runnable() {
                             @Override
                             public void run() {
-                                bluetoothScanIfNeeded();
+                                textSettingDialog(activity,
+                                        "clfollow_user", "CareLink Username",
+                                        "Enter CareLink Username",
+                                        InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS | InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD,
+                                        new Runnable() {
+                                            @Override
+                                            public void run() {
+                                                textSettingDialog(activity,
+                                                        "clfollow_pass", "CareLink Password",
+                                                        "Enter CareLink Password",
+                                                        InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS | InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD,
+                                                        new Runnable() {
+                                                            @Override
+                                                            public void run() {
+                                                                textSettingDialog(activity,
+                                                                        "clfollow_patient", "CareLink Patient",
+                                                                        "Enter CareLink Patient (optional)",
+                                                                        InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS | InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD,
+                                                                        new Runnable() {
+                                                                            @Override
+                                                                            public void run() {
+                                                                                Home.staticRefreshBGCharts();
+                                                                                CareLinkFollowService.resetInstanceAndInvalidateSession();
+                                                                                CollectionServiceStarter.restartCollectionServiceBackground();
+                                                                            }
+                                                                        });
+                                                            }
+                                                        });
+                                            }
+                                        });
                             }
                         });
                 break;
 
+             */
 
-            case LimiTTer:
-                bluetoothScanIfNeeded();
-                break;
+            // TODO G4 Share Receiver
 
-            case BluetoothWixel:
-                bluetoothScanIfNeeded();
-                break;
+            // TODO Parakeet / Wifi ??
 
-            case DexcomShare:
-                bluetoothScanIfNeeded();
-                break;
+            // TODO Bluetooth devices without active device -> bluetooth scan
 
-
-                // TODO G4 Share Receiver
-
-                // TODO Parakeet / Wifi ??
-
-                // TODO Bluetooth devices without active device -> bluetooth scan
-
-                // TODO Helper apps not installed? Prompt for installation
+            // TODO Helper apps not installed? Prompt for installation
 
         }
-
-
     }
 
     public static void bluetoothScanIfNeeded() {
@@ -98,54 +176,4 @@ public class DexCollectionHelper {
             xdrip.getAppContext().startActivity(new Intent(xdrip.getAppContext(), BluetoothScan.class).setFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
         }
     }
-
-    // TODO this can move to its own utility class
-    public static void textSettingDialog(Activity activity, String setting, String title, String message, int input_type, final Runnable postRun) {
-        final AlertDialog.Builder dialogBuilder = new AlertDialog.Builder(activity);
-
-        final View dialogView = activity.getLayoutInflater().inflate(R.layout.dialog_text_entry, null);
-        dialogBuilder.setView(dialogView);
-
-        final EditText edt = (EditText) dialogView.findViewById(R.id.dialogTextEntryeditText);
-
-        if (input_type != 0) {
-            edt.setInputType(input_type);
-        }
-
-        edt.setText(Pref.getString(setting, ""));
-
-        final TextView tv = (TextView) dialogView.findViewById(R.id.dialogTextEntryTextView);
-        dialogBuilder.setTitle(title);
-        tv.setText(message);
-        dialogBuilder.setPositiveButton(R.string.done, new DialogInterface.OnClickListener() {
-            public void onClick(DialogInterface dialog, int whichButton) {
-                final String text = edt.getText().toString().trim();
-                Pref.setString(setting, text);
-                if (postRun != null) postRun.run();
-            }
-        });
-        dialogBuilder.setNegativeButton(R.string.cancel, new DialogInterface.OnClickListener() {
-            public void onClick(DialogInterface dialog, int whichButton) {
-                if (postRun != null) postRun.run();
-            }
-        });
-
-        try {
-            if (isDialogShowing()) dialog.dismiss();
-        } catch (Exception e) {
-            //
-        }
-
-        dialog = dialogBuilder.create();
-        try {
-            dialog.show();
-        } catch (Exception e) {
-            UserError.Log.e(TAG, "Could not show dialog: " + e);
-        }
-    }
-
-    public static boolean isDialogShowing() {
-        return (dialog != null) && dialog.isShowing();
-    }
-
 }

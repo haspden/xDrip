@@ -2,29 +2,30 @@ package com.eveningoutpost.dexdrip.eassist;
 
 import android.Manifest;
 import android.app.Activity;
+import android.content.ActivityNotFoundException;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.database.Cursor;
-import android.databinding.ObservableArrayList;
-import android.databinding.ObservableList;
+import androidx.databinding.ObservableArrayList;
+import androidx.databinding.ObservableList;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.provider.ContactsContract;
-import android.support.annotation.NonNull;
-import android.support.v4.app.ActivityCompat;
-import android.support.v4.content.ContextCompat;
-import android.support.v7.app.AppCompatActivity;
+import androidx.annotation.NonNull;
+import androidx.core.app.ActivityCompat;
+import androidx.core.content.ContextCompat;
 import android.view.View;
 
 import com.eveningoutpost.dexdrip.BR;
-import com.eveningoutpost.dexdrip.Models.JoH;
-import com.eveningoutpost.dexdrip.Models.UserError;
+import com.eveningoutpost.dexdrip.BaseAppCompatActivity;
+import com.eveningoutpost.dexdrip.models.JoH;
+import com.eveningoutpost.dexdrip.models.UserError;
 import com.eveningoutpost.dexdrip.R;
-import com.eveningoutpost.dexdrip.UtilityModels.Constants;
-import com.eveningoutpost.dexdrip.UtilityModels.Inevitable;
-import com.eveningoutpost.dexdrip.UtilityModels.PrefsViewImpl;
-import com.eveningoutpost.dexdrip.UtilityModels.PrefsViewString;
+import com.eveningoutpost.dexdrip.utilitymodels.Constants;
+import com.eveningoutpost.dexdrip.utilitymodels.Inevitable;
+import com.eveningoutpost.dexdrip.utilitymodels.PrefsViewImpl;
+import com.eveningoutpost.dexdrip.utilitymodels.PrefsViewString;
 import com.eveningoutpost.dexdrip.databinding.ActivityEmergencyAssistBinding;
 import com.eveningoutpost.dexdrip.ui.dialog.GenericConfirmDialog;
 import com.eveningoutpost.dexdrip.utils.LocationHelper;
@@ -39,6 +40,8 @@ import static com.eveningoutpost.dexdrip.eassist.EmergencyAssist.EMERGENCY_ASSIS
 import static com.eveningoutpost.dexdrip.eassist.EmergencyAssist.EMERGENCY_HIGH_MINS_PREF;
 import static com.eveningoutpost.dexdrip.eassist.EmergencyAssist.EMERGENCY_LOW_MINS_PREF;
 
+import static com.eveningoutpost.dexdrip.xdrip.gs;
+
 /*
  * jamorham
  *
@@ -46,7 +49,7 @@ import static com.eveningoutpost.dexdrip.eassist.EmergencyAssist.EMERGENCY_LOW_M
  *
  */
 
-public class EmergencyAssistActivity extends AppCompatActivity {
+public class EmergencyAssistActivity extends BaseAppCompatActivity {
 
     private static final String TAG = EmergencyAssistActivity.class.getSimpleName();
     private static final int CONTACT_REQUEST_CODE = 46912;
@@ -99,7 +102,7 @@ public class EmergencyAssistActivity extends AppCompatActivity {
                     Manifest.permission.READ_CONTACTS)
                     != PackageManager.PERMISSION_GRANTED) {
                 final Activity activity = this;
-                JoH.show_ok_dialog(activity, "Please Allow Permission", "Need contacts permission to select message recipients", new Runnable() {
+                JoH.show_ok_dialog(activity, gs(R.string.please_allow_permission), gs(R.string.need_contacts_permission_to_select_message_recipients), new Runnable() {
                     @Override
                     public void run() {
                         ActivityCompat.requestPermissions(activity,
@@ -122,7 +125,7 @@ public class EmergencyAssistActivity extends AppCompatActivity {
             if (!isSMSPermissionGranted()) {
                 if (JoH.ratelimit("check-sms-permission", 2)) {
                     final Activity activity = this;
-                    JoH.show_ok_dialog(activity, "Please Allow Permission", "Need SMS permission to send text messages to your emergency contacts."
+                    JoH.show_ok_dialog(activity, gs(R.string.please_allow_permission), "Need SMS permission to send text messages to your emergency contacts."
                             + "\n\n"
                             + "Warning this can cost money at normal telecoms rates!", () -> ActivityCompat.requestPermissions(activity,
                             new String[]{Manifest.permission.SEND_SMS}, MY_PERMISSIONS_REQUEST_SMS));
@@ -151,9 +154,13 @@ public class EmergencyAssistActivity extends AppCompatActivity {
 
     public void chooseContact(View v) {
         if (checkContactsPermission()) {
-            final Intent intent = new Intent(Intent.ACTION_PICK, Uri.parse("content://contacts"));
-            intent.setType(ContactsContract.CommonDataKinds.Phone.CONTENT_TYPE);
-            startActivityForResult(intent, CONTACT_REQUEST_CODE);
+            try {
+                final Intent intent = new Intent(Intent.ACTION_PICK, Uri.parse("content://contacts"));
+                intent.setType(ContactsContract.CommonDataKinds.Phone.CONTENT_TYPE);
+                startActivityForResult(intent, CONTACT_REQUEST_CODE);
+            } catch (ActivityNotFoundException e) {
+                JoH.static_toast_long("Device doesn't have a contact picker!?");
+            }
         }
     }
 
@@ -196,32 +203,39 @@ public class EmergencyAssistActivity extends AppCompatActivity {
     @Override
     protected void onActivityResult(int requestCode, int resultCode,
                                     Intent intent) {
+        if (intent == null) return;
         if (requestCode == CONTACT_REQUEST_CODE) {
             if (resultCode == RESULT_OK) {
                 final Uri uri = intent.getData();
                 final String[] projection = {Phone.NUMBER, Phone.DISPLAY_NAME};
                 if (uri != null) {
-                    final Cursor cursor = getContentResolver().query(uri, projection,
-                            null, null, null);
-                    if (cursor != null) {
-                        cursor.moveToFirst();
+                    try {
+                        final Cursor cursor = getContentResolver().query(uri, projection,
+                                null, null, null);
+                        if (cursor != null) {
+                            cursor.moveToFirst();
 
-                        int numberColumnIndex = cursor.getColumnIndex(Phone.NUMBER);
-                        String number = cursor.getString(numberColumnIndex);
+                            int numberColumnIndex = cursor.getColumnIndex(Phone.NUMBER);
+                            String number = cursor.getString(numberColumnIndex);
 
-                        int nameColumnIndex = cursor.getColumnIndex(Phone.DISPLAY_NAME_PRIMARY);
-                        String name = cursor.getString(nameColumnIndex).trim();
+                            int nameColumnIndex = cursor.getColumnIndex(Phone.DISPLAY_NAME_PRIMARY);
+                            String name = cursor.getString(nameColumnIndex).trim();
 
-                        if (name.length() > 0) {
-                            if (number.length() > 5) {
-                                binding.getContactModel().add(name, number);
+                            if (name.length() > 0) {
+                                if (number.length() > 5) {
+                                    binding.getContactModel().add(name, number);
+                                } else {
+                                    JoH.static_toast_long("Cannot add " + name + " as number is invalid!");
+                                }
                             } else {
-                                JoH.static_toast_long("Cannot add " + name + " as number is invalid!");
+                                JoH.static_toast_long("Cannot add as name is invalid");
                             }
-                        } else {
-                            JoH.static_toast_long("Cannot add as name is invalid");
+                            cursor.close();
                         }
-                        cursor.close();
+                    } catch (Exception e) {
+                        final String msg = "Got error trying to read contact information: " + e;
+                        UserError.Log.wtf(TAG, msg);
+                        JoH.static_toast_long(msg);
                     }
                 } else {
                     JoH.static_toast_long("Got null uri trying to read contact");

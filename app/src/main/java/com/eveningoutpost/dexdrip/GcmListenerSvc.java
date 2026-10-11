@@ -16,29 +16,36 @@ import android.os.Handler;
 import android.os.PowerManager;
 import android.util.Base64;
 
-import com.eveningoutpost.dexdrip.Models.BgReading;
-import com.eveningoutpost.dexdrip.Models.BloodTest;
-import com.eveningoutpost.dexdrip.Models.Calibration;
-import com.eveningoutpost.dexdrip.Models.JoH;
-import com.eveningoutpost.dexdrip.Models.RollCall;
-import com.eveningoutpost.dexdrip.Models.Sensor;
-import com.eveningoutpost.dexdrip.Models.TransmitterData;
-import com.eveningoutpost.dexdrip.Models.Treatments;
-import com.eveningoutpost.dexdrip.Models.UserError;
-import com.eveningoutpost.dexdrip.Models.UserError.Log;
-import com.eveningoutpost.dexdrip.Services.ActivityRecognizedService;
-import com.eveningoutpost.dexdrip.UtilityModels.AlertPlayer;
-import com.eveningoutpost.dexdrip.UtilityModels.Constants;
-import com.eveningoutpost.dexdrip.UtilityModels.Pref;
-import com.eveningoutpost.dexdrip.UtilityModels.PumpStatus;
-import com.eveningoutpost.dexdrip.UtilityModels.StatusItem;
+import com.eveningoutpost.dexdrip.cloud.jamcm.JamCm;
+import com.eveningoutpost.dexdrip.models.BgReading;
+import com.eveningoutpost.dexdrip.models.BloodTest;
+import com.eveningoutpost.dexdrip.models.Calibration;
+import com.eveningoutpost.dexdrip.models.DesertSync;
+import com.eveningoutpost.dexdrip.models.JoH;
+import com.eveningoutpost.dexdrip.models.LibreBlock;
+import com.eveningoutpost.dexdrip.models.RollCall;
+import com.eveningoutpost.dexdrip.models.Sensor;
+import com.eveningoutpost.dexdrip.models.SensorSanity;
+import com.eveningoutpost.dexdrip.models.TransmitterData;
+import com.eveningoutpost.dexdrip.models.Treatments;
+import com.eveningoutpost.dexdrip.models.UserError;
+import com.eveningoutpost.dexdrip.models.UserError.Log;
+import com.eveningoutpost.dexdrip.services.ActivityRecognizedService;
+import com.eveningoutpost.dexdrip.utilitymodels.AlertPlayer;
+import com.eveningoutpost.dexdrip.utilitymodels.Constants;
+import com.eveningoutpost.dexdrip.utilitymodels.NanoStatus;
+import com.eveningoutpost.dexdrip.utilitymodels.PersistentStore;
+import com.eveningoutpost.dexdrip.utilitymodels.Pref;
+import com.eveningoutpost.dexdrip.utilitymodels.PumpStatus;
+import com.eveningoutpost.dexdrip.utilitymodels.StatusItem;
+import com.eveningoutpost.dexdrip.utilitymodels.WholeHouse;
 import com.eveningoutpost.dexdrip.utils.CheckBridgeBattery;
 import com.eveningoutpost.dexdrip.utils.CipherUtils;
 import com.eveningoutpost.dexdrip.utils.Preferences;
 import com.eveningoutpost.dexdrip.utils.WebAppHelper;
+import com.eveningoutpost.dexdrip.utils.bt.Mimeograph;
 import com.eveningoutpost.dexdrip.wearintegration.ExternalStatusService;
 import com.google.firebase.messaging.FirebaseMessaging;
-import com.google.firebase.messaging.FirebaseMessagingService;
 import com.google.firebase.messaging.RemoteMessage;
 
 import java.io.UnsupportedEncodingException;
@@ -48,11 +55,12 @@ import java.util.Date;
 import java.util.List;
 import java.util.Map;
 
-import static android.support.v4.content.WakefulBroadcastReceiver.completeWakefulIntent;
-import static com.eveningoutpost.dexdrip.Models.JoH.showNotification;
+import static com.eveningoutpost.dexdrip.GcmActivity.cease_all_activity;
+import static com.eveningoutpost.dexdrip.models.JoH.isAnyNetworkConnected;
+import static com.eveningoutpost.dexdrip.models.JoH.showNotification;
+import static com.eveningoutpost.dexdrip.models.JoH.tsl;
 
-
-public class GcmListenerSvc extends FirebaseMessagingService {
+public class GcmListenerSvc extends JamListenerSvc {
 
     private static final String TAG = "jamorham GCMlis";
     private static final String EXTRA_WAKE_LOCK_ID = "android.support.content.wakelockid";
@@ -60,7 +68,7 @@ public class GcmListenerSvc extends FirebaseMessagingService {
     private static byte[] staticKey;
 
     public static int lastMessageMinutesAgo() {
-        return (int) ((JoH.tsl() - GcmListenerSvc.lastMessageReceived) / 60000);
+        return (int) ((tsl() - GcmListenerSvc.lastMessageReceived) / 60000);
     }
 
     // data for MegaStatus
@@ -71,25 +79,41 @@ public class GcmListenerSvc extends FirebaseMessagingService {
         return l;
     }
 
-    @Override
-    protected Intent zzaa(Intent inteceptedIntent) {
+    // TODO probably needs alternate workaround for google play bug
+    /*@Override
+    protected Intent zzf(Intent interceptedIntent) {
         // intercept and fix google play services wakelocking bug
         try {
             if (!Pref.getBooleanDefaultFalse("excessive_wakelocks")) {
-                completeWakefulIntent(inteceptedIntent);
-                final Bundle extras = inteceptedIntent.getExtras();
+                completeWakefulIntent(interceptedIntent);
+                final Bundle extras = interceptedIntent.getExtras();
                 if (extras != null) extras.remove(EXTRA_WAKE_LOCK_ID);
             }
         } catch (Exception e) {
             UserError.Log.wtf(TAG, "Error patching play services: " + e);
         }
-        return super.zzaa(inteceptedIntent);
-    }
+        return super.zzf(interceptedIntent);
+    }*/
+
 
     @Override
     public void onSendError(String msgID, Exception exception) {
-        Log.e(TAG, "onSendError called" + msgID, exception);
+        boolean unexpected = true;
+        if (exception.getMessage().equals("TooManyMessages")) {
+            if (isAnyNetworkConnected() && googleReachable()) {
+                GcmActivity.coolDown();
+            }
+            unexpected = false;
+        }
+        if (unexpected || JoH.ratelimit("gcm-expected-error", 86400)) {
+            Log.e(TAG, "onSendError called" + msgID, exception);
+        }
     }
+
+    private static boolean googleReachable() {
+        return false; // TODO we need a method for this to properly handle cooldown default to false to disable functionality
+    }
+
 
     @Override
     public void onDeletedMessages() {
@@ -106,7 +130,7 @@ public class GcmListenerSvc extends FirebaseMessagingService {
         final PowerManager.WakeLock wl = JoH.getWakeLock("xdrip-onMsgRec", 120000);
         try {
             if (rmessage == null) return;
-            if (GcmActivity.cease_all_activity) return;
+            if (cease_all_activity) return;
             String from = rmessage.getFrom();
 
             final Bundle data = new Bundle();
@@ -114,7 +138,14 @@ public class GcmListenerSvc extends FirebaseMessagingService {
                 data.putString(entry.getKey(), entry.getValue());
             }
 
-            if (from == null) from = "null";
+            if (from == null) {
+                if (isInjectable()) {
+                    from = data.getString("yfrom");
+                }
+                if (from == null) {
+                    from = "null";
+                }
+            }
             String message = data.getString("message");
 
             Log.d(TAG, "From: " + from);
@@ -137,10 +168,9 @@ public class GcmListenerSvc extends FirebaseMessagingService {
             if (from.startsWith(getString(R.string.gcmtpc))) {
 
                 String xfrom = data.getString("xfrom");
-                String payload = data.getString("datum");
+                String payload = data.getString("datum", data.getString("payload"));
                 String action = data.getString("action");
-
-                if ((xfrom != null) && (xfrom.equals(GcmActivity.token))) {
+                if ((xfrom != null) && (xfrom.equals(GcmActivity.token) || xfrom.equals(JamCm.getId()))) {
                     GcmActivity.queueAction(action + payload);
                     return;
                 }
@@ -157,6 +187,14 @@ public class GcmListenerSvc extends FirebaseMessagingService {
                     }
                     return;
                 }
+
+                if (!isInjectable()) {
+                    if (!DesertSync.fromGCM(data)) {
+                        UserError.Log.d(TAG, "Skipping inbound data due to duplicate detection");
+                        return;
+                    }
+                }
+
                 byte[] bpayload = null;
                 if (payload == null) payload = "";
                 if (action == null) action = "null";
@@ -214,7 +252,7 @@ public class GcmListenerSvc extends FirebaseMessagingService {
                 }
 
                 Log.i(TAG, "Got action: " + action + " with payload: " + payload);
-                lastMessageReceived = JoH.tsl();
+                lastMessageReceived = tsl();
 
 
                 // new treatment
@@ -255,7 +293,7 @@ public class GcmListenerSvc extends FirebaseMessagingService {
                                 message_array[2] = Long.toString(Long.parseLong(message_array[2]) + timediff);
                             }
                             Log.i(TAG, "Processing remote CAL " + message_array[1] + " age: " + message_array[2]);
-                            calintent.putExtra("timestamp", JoH.tsl());
+                            calintent.putExtra("timestamp", tsl());
                             calintent.putExtra("bg_string", message_array[1]);
                             calintent.putExtra("bg_age", message_array[2]);
                             calintent.putExtra("cal_source", "gcm cal packet");
@@ -282,7 +320,7 @@ public class GcmListenerSvc extends FirebaseMessagingService {
                                 bg_age += timediff;
                             }
                             Log.i(TAG, "Processing remote CAL " + newCalibration.bgValue + " age: " + bg_age);
-                            calintent.putExtra("timestamp", JoH.tsl());
+                            calintent.putExtra("timestamp", tsl());
                             calintent.putExtra("bg_string", "" + (Pref.getString("units", "mgdl").equals("mgdl") ? newCalibration.bgValue : newCalibration.bgValue * Constants.MGDL_TO_MMOLL));
                             calintent.putExtra("bg_age", "" + bg_age);
                             calintent.putExtra("cal_source", "gcm cal2 packet");
@@ -312,11 +350,6 @@ public class GcmListenerSvc extends FirebaseMessagingService {
                     GcmActivity.send_ping_reply();
                 } else if (action.equals("q")) {
                     Home.toaststatic("Received ping reply");
-                } else if (action.equals("plu")) {
-                    // process map update
-                    if (Home.get_follower()) {
-                        MapsActivity.newMapLocation(payload, (long) JoH.ts());
-                    }
                 } else if (action.equals("sbu")) {
                     if (Home.get_follower()) {
                         Log.i(TAG, "Received sensor battery level update");
@@ -331,14 +364,18 @@ public class GcmListenerSvc extends FirebaseMessagingService {
                     }
                 } else if (action.equals("pbu")) {
                     if (Home.get_follower()) {
-                        Log.i(TAG, "Received parakeet battery level update");
+                        Log.i(TAG, "Received wifi uploader battery level update");
                         Pref.setInt("parakeet_battery", Integer.parseInt(payload));
-                        CheckBridgeBattery.checkParakeetBattery();
                     }
                 } else if (action.equals("psu")) {
                     if (Home.get_follower()) {
                         Log.i(TAG, "Received pump status update");
                         PumpStatus.fromJson(payload);
+                    }
+                } else if (action.startsWith("nscu")) {
+                    if (Home.get_follower()) {
+                        Log.i(TAG, "Received nanostatus update: " + action);
+                        NanoStatus.setRemote(action.replaceAll("^nscu", ""), payload);
                     }
                 } else if (action.equals("not")) {
                     if (Home.get_follower()) {
@@ -349,6 +386,7 @@ public class GcmListenerSvc extends FirebaseMessagingService {
                             final String body = payloadA[1];
                             final PendingIntent pendingIntent = android.app.PendingIntent.getActivity(xdrip.getAppContext(), 0, new Intent(xdrip.getAppContext(), Home.class), android.app.PendingIntent.FLAG_UPDATE_CURRENT);
                             showNotification(title, body, pendingIntent, GCM_NOTIFICATION_ITEM, true, true, false);
+                            UserError.Log.uel(TAG, "Follower Notification with payload");
                         } catch (Exception e) {
                             UserError.Log.e(TAG, "Error showing follower notification with payload: " + payload);
                         }
@@ -393,7 +431,7 @@ public class GcmListenerSvc extends FirebaseMessagingService {
                                     if (ii.length > 1) sender_ssid = JoH.base64decode(ii[1]);
                                 }
                                 if (!Pref.getBooleanDefaultFalse("remote_snoozes_wifi_match") || JoH.getWifiFuzzyMatch(sender_ssid, JoH.getWifiSSID())) {
-                                    if (Math.abs(JoH.tsl() - snoozed_time) < 300000) {
+                                    if (Math.abs(tsl() - snoozed_time) < 300000) {
                                         if (JoH.pratelimit("received-remote-snooze", 30)) {
                                             AlertPlayer.getPlayer().Snooze(xdrip.getAppContext(), -1, false);
                                             UserError.Log.ueh(TAG, "Accepted remote snooze");
@@ -416,13 +454,14 @@ public class GcmListenerSvc extends FirebaseMessagingService {
                     }
                 } else if (action.equals("bgs")) {
                     Log.i(TAG, "Received BG packet(s)");
-                    if (Home.get_follower()) {
-                        String bgs[] = payload.split("\\^");
+                    if (Home.get_follower() || WholeHouse.isEnabled()) {
+                        final String bgs[] = payload.split("\\^");
                         for (String bgr : bgs) {
                             BgReading.bgReadingInsertFromJson(bgr);
                         }
                         if (Pref.getBooleanDefaultFalse("follower_chime") && JoH.pratelimit("bgs-notify", 1200)) {
                             JoH.showNotification("New glucose data @" + JoH.hourMinuteString(), "Follower Chime: will alert whenever it has been more than 20 minutes since last", null, 60311, true, true, true);
+                            UserError.Log.uel(TAG, "Follower Chime");
                         }
                     } else {
                         Log.e(TAG, "Received remote BG packet but we are not set as a follower");
@@ -451,19 +490,30 @@ public class GcmListenerSvc extends FirebaseMessagingService {
                 } else if (action.equals("bfr")) {
                     if (Pref.getBooleanDefaultFalse("plus_follow_master")) {
                         Log.i(TAG, "Processing backfill location request as we are master");
-                        GcmActivity.syncBGTable2();
+                        final long remoteRecent = JoH.tolerantParseLong(payload, 0);
+                        final BgReading bgReading = BgReading.last();
+                        if (bgReading != null && bgReading.timestamp > remoteRecent) {
+                            GcmActivity.syncBGTable2();
+                        } else {
+                            // TODO reduce logging priority
+                            UserError.Log.e(TAG, "We do not have any more recent data to offer than: " + (bgReading != null ? JoH.dateTimeText(bgReading.timestamp) : "no data"));
+                        }
                     }
                 } else if (action.equals("sensorupdate")) {
                     Log.i(TAG, "Received sensorupdate packet(s)");
-                    if (Home.get_follower()) {
+                    if (Home.get_follower() || WholeHouse.isEnabled()) {
                         GcmActivity.upsertSensorCalibratonsFromJson(payload);
                     } else {
                         Log.e(TAG, "Received sensorupdate packets but we are not set as a follower");
                     }
-                } else if (action.equals("sensor_calibrations_update")) {
+                } else if (action.equals("sencalup")) {
                     if (Home.get_master()) {
                         Log.i(TAG, "Received request for sensor calibration update");
                         GcmActivity.syncSensor(Sensor.currentSensor(), false);
+                    }
+                } else if (action.equals("mimg")) {
+                    if (Home.get_master() && WholeHouse.isLive()) {
+                        Mimeograph.putXferFromJson(payload);
                     }
                 } else if (action.equals("btmm")) {
                     if (Home.get_master_or_follower() && Home.follower_or_accept_follower()) {
@@ -489,8 +539,12 @@ public class GcmListenerSvc extends FirebaseMessagingService {
                 } else if (action.equals("ssom")) {
                     if (Home.get_master()) {
                         if (payload.equals("challenge string")) {
-                            UserError.Log.e(TAG, "Stopping sensor by remote");
-                            StopSensor.stop();
+                            if (Pref.getBoolean("plus_accept_follower_actions", true)) {
+                                UserError.Log.i(TAG, "Stopping sensor by remote");
+                                StopSensor.stop();
+                            } else {
+                                UserError.Log.w(TAG, "Stop sensor by follower rejected because follower actions are disabled");
+                            }
                         } else {
                             UserError.Log.wtf(TAG, "Challenge string failed in ssom");
                         }
@@ -504,9 +558,27 @@ public class GcmListenerSvc extends FirebaseMessagingService {
                             UserError.Log.wtf(TAG, "Exception processing rsom timestamp");
                         }
                     }
-
+                } else if (action.equals("libreBlock") || action.equals("libreBlck")) {
+                    HandleLibreBlock(payload);
                 } else {
-                    Log.e(TAG, "Received message action we don't know about: " + action);
+                    switch (action) {
+                        case "cease0":
+                        case "cease1":
+                        case "cease2":
+                        case "cease3":
+                        case "cease4":
+                        case "cease5":
+                        case "cease6":
+                        case "cease7":
+                        case "cease8":
+                        case "cease9":
+                            cease_all_activity = true;
+                            Log.wtf(TAG, "Server requested to cease all activity for reason: " + action);
+                            break;
+                        default:
+                            Log.e(TAG, "Received message action we don't know about: " + action);
+                            break;
+                    }
                 }
             } else {
                 // direct downstream message.
@@ -517,6 +589,34 @@ public class GcmListenerSvc extends FirebaseMessagingService {
         }
     }
 
+    private void HandleLibreBlock(final String payload) {
+        LibreBlock lb = LibreBlock.createFromExtendedJson(payload);
+        if (lb == null) {
+            return;
+        }
+
+        if (lb.timestamp == 0) {
+            UserError.Log.e(TAG, "Corrupt libre block from sync");
+            return;
+        }
+
+        if (LibreBlock.getForTimestamp(lb.timestamp) != null) {
+            // We already seen this one.
+            return;
+        }
+        LibreBlock.Save(lb);
+
+        PersistentStore.setString("LibreSN", lb.reference);
+
+        if (Home.get_master()) {
+            if (SensorSanity.checkLibreSensorChangeIfEnabled(lb.reference)) {
+                Log.e(TAG, "Problem with Libre Serial Number - not processing");
+                return;
+            }
+
+            NFCReaderX.HandleGoodReading(lb.reference, lb.blockbytes, lb.timestamp, false, lb.patchUid, lb.patchInfo);
+        }
+    }
 
     private void sendNotification(String body, String title) {
         Intent intent = new Intent(this, Home.class);

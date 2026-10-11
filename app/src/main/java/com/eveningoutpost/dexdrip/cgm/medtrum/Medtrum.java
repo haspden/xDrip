@@ -8,21 +8,21 @@ package com.eveningoutpost.dexdrip.cgm.medtrum;
 
 import android.util.Pair;
 
-import com.eveningoutpost.dexdrip.Models.JoH;
-import com.eveningoutpost.dexdrip.Models.UserError;
-import com.eveningoutpost.dexdrip.UtilityModels.Constants;
-import com.eveningoutpost.dexdrip.UtilityModels.Inevitable;
-import com.eveningoutpost.dexdrip.UtilityModels.PersistentStore;
-import com.eveningoutpost.dexdrip.UtilityModels.Pref;
+import com.eveningoutpost.dexdrip.models.JoH;
+import com.eveningoutpost.dexdrip.models.UserError;
+import com.eveningoutpost.dexdrip.utilitymodels.Constants;
+import com.eveningoutpost.dexdrip.utilitymodels.Inevitable;
+import com.eveningoutpost.dexdrip.utilitymodels.PersistentStore;
+import com.eveningoutpost.dexdrip.utilitymodels.Pref;
 import com.eveningoutpost.dexdrip.cgm.medtrum.messages.AdvertRx;
 import com.eveningoutpost.dexdrip.cgm.medtrum.messages.AnnexARx;
 import com.eveningoutpost.dexdrip.utils.DexCollectionType;
 import com.eveningoutpost.dexdrip.utils.bt.ScanRecordFromLegacy;
-import com.polidea.rxandroidble.scan.ScanRecord;
+import com.polidea.rxandroidble2.scan.ScanRecord;
 
 import lombok.Getter;
 
-import static com.eveningoutpost.dexdrip.Models.JoH.msSince;
+import static com.eveningoutpost.dexdrip.models.JoH.msSince;
 import static com.eveningoutpost.dexdrip.cgm.medtrum.Const.MANUFACTURER_ID;
 import static com.eveningoutpost.dexdrip.cgm.medtrum.Const.SUPPORTED_DEVICES;
 
@@ -33,6 +33,8 @@ public class Medtrum {
     private static final String PENDING_CALIBRATION_TIMESTAMP = "medtrum-pending-calibration-timestamp";
     private static final String PENDING_CALIBRATION_GLUCOSE = "medtrum-pending-calibration-glucose";
     private static final String VERSION_STORE = "medtrum-tx-version-";
+    public static final String PREF_AHEX = "medtrum_a_hex";
+
 
     @Getter
     private static AnnexARx lastAdvertAnnex = null;

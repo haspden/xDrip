@@ -1,20 +1,27 @@
 package com.eveningoutpost.dexdrip;
 
+import static com.eveningoutpost.dexdrip.models.JoH.emptyString;
+import static com.eveningoutpost.dexdrip.xdrip.gs;
+
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.os.Bundle;
-import android.preference.PreferenceManager;
 import android.util.Log;
 
-import com.eveningoutpost.dexdrip.Models.BgReading;
-import com.eveningoutpost.dexdrip.Models.JoH;
-import com.eveningoutpost.dexdrip.Models.Treatments;
-import com.eveningoutpost.dexdrip.Models.UserError;
-import com.eveningoutpost.dexdrip.UtilityModels.Constants;
-import com.eveningoutpost.dexdrip.UtilityModels.Intents;
-import com.eveningoutpost.dexdrip.UtilityModels.Pref;
+import androidx.annotation.VisibleForTesting;
+import androidx.preference.PreferenceManager;
+
+import com.eveningoutpost.dexdrip.insulin.aaps.AAPSStatusHandler;
+import com.eveningoutpost.dexdrip.models.BgReading;
+import com.eveningoutpost.dexdrip.models.JoH;
+import com.eveningoutpost.dexdrip.models.Treatments;
+import com.eveningoutpost.dexdrip.models.UserError;
+import com.eveningoutpost.dexdrip.utilitymodels.Constants;
+import com.eveningoutpost.dexdrip.utilitymodels.Intents;
+import com.eveningoutpost.dexdrip.utilitymodels.Pref;
+import com.eveningoutpost.dexdrip.profileeditor.ImportAapsProfile;
 
 import org.json.JSONArray;
 import org.json.JSONException;
@@ -22,6 +29,8 @@ import org.json.JSONObject;
 
 import java.util.HashMap;
 import java.util.UUID;
+
+import lombok.val;
 
 
 /**
@@ -32,6 +41,12 @@ public class NSClientReceiver extends BroadcastReceiver {
     private static final String TAG = "jamorham nsreceiver";
     private static final boolean debug = false;
     private static SharedPreferences prefs;
+
+    /** Forgets the cached preference store, so the next broadcast fetches it again. */
+    @VisibleForTesting
+    static void resetPrefsCacheForTests() {
+        prefs = null;
+    }
 
     @Override
     public void onReceive(Context context, Intent intent) {
@@ -52,8 +67,28 @@ public class NSClientReceiver extends BroadcastReceiver {
         if (action == null) return;
 
         switch (action) {
+            case Intents.ACTION_NEW_DEVICESTATUS:
+            case Intents.ACTION_NS_BRIDGE:
+                if (bundle == null) break;
+                if (prefs.getBoolean("accept_nsclient_treatments", true)) {
+
+                    final String device_status_json = bundle.getString("devicestatus", "");
+                    if (!emptyString(device_status_json)) {
+                        try {
+                            AAPSStatusHandler.processDeviceStatus(device_status_json);
+                        } catch (Exception e) {
+                            Log.e(TAG, "Exception processing device status in NS_BRIDGE action: " + e);
+                        }
+                    } else {
+                        Log.e(TAG, "Empty device status received via NS_BRIDGE action");
+                    }
+                } else {
+                    Log.e(TAG, "Cannot accept device status as preference setting prevents it");
+                }
+                break;
+
             case Intents.ACTION_NEW_SGV:
-                if (Home.get_follower()) {
+                if (Home.get_follower() && prefs.getBoolean("accept_nsclient_sgv", true)) {
                     if (bundle == null) break;
                     final String sgvs_json = bundle.getString("sgvs", "");
                     if (sgvs_json.length() > 0) {
@@ -75,6 +110,7 @@ public class NSClientReceiver extends BroadcastReceiver {
                 }
                 break;
 
+            case Intents.ACTION_NEW_FOOD: // action changed unexpectedly
             case Intents.ACTION_NEW_TREATMENT:
                 if (bundle == null) break;
                 if (prefs.getBoolean("accept_nsclient_treatments", true)) {
@@ -90,7 +126,7 @@ public class NSClientReceiver extends BroadcastReceiver {
                                 process_TREATMENT_json(jsonArray.getString(i));
                             }
                         } catch (JSONException e) {
-                            Log.e(TAG, "Json exception with sgvs: " + e.toString());
+                            Log.e(TAG, "Json exception with treatments: " + e.toString());
                         }
                     }
                 } else {
@@ -119,7 +155,7 @@ public class NSClientReceiver extends BroadcastReceiver {
                     if (glucose_number > 0) {
 
                         if (timeoffset < 0) {
-                            Home.toaststaticnext("Got calibration in the future - cannot process!");
+                            Home.toaststaticnext(gs(R.string.got_calibration_in_the_future__cannot_process));
                             break;
                         }
 
@@ -170,8 +206,24 @@ public class NSClientReceiver extends BroadcastReceiver {
 
     private void process_TREATMENT_json(String treatment_json) {
         try {
-            Log.i(TAG, "Processing treatment from NS: "+treatment_json);
-            Treatments.pushTreatmentFromJson(toTreatmentJSON(JoH.JsonStringtoMap(treatment_json)), true); // warning marked as from interactive - watch out for feedback loops
+            Log.i(TAG, "Processing treatment from NS: " + treatment_json);
+            val tmap = JoH.JsonStringtoMap(treatment_json);
+
+            try {
+                val etype = tmap.get("eventType");
+                if (etype != null) {
+                    switch ((String) etype) {
+                        case "Profile Switch":
+                            ImportAapsProfile.importAndSaveFromMap(tmap);
+                            break;
+                    }
+                }
+            } catch (Exception e) {
+                UserError.Log.wtf(TAG, "Got exception trying to handle NS treatment json: " + e + " " + treatment_json);
+            }
+
+            Treatments.pushTreatmentFromJson(toTreatmentJSON(tmap), true); // warning marked as from interactive - watch out for feedback loops
+
         } catch (Exception e) {
             Log.e(TAG, "Got exception processing treatment from NS client " + e.toString());
         }
@@ -198,6 +250,7 @@ public class NSClientReceiver extends BroadcastReceiver {
         JSONObject jsonObject = new JSONObject();
         try {
             jsonObject.put("uuid", UUID.randomUUID().toString());
+            jsonObject.put("source_info", "NSClient Follow");
 
             jsonObject.put("timestamp", sgv_map.get("mills"));
             jsonObject.put("calculated_value", sgv_map.get("mgdl"));
@@ -235,7 +288,12 @@ public class NSClientReceiver extends BroadcastReceiver {
         try {
             // jsonObject.put("uuid", UUID.fromString(trt_map.get("_id").toString()).toString());
 
-            jsonObject.put("timestamp", trt_map.get("mills"));
+            Object ts =  trt_map.get("mills");
+            if (ts == null) {
+                ts = trt_map.get("date"); // identifier changed at some point
+            }
+
+            jsonObject.put("timestamp", ts);
             jsonObject.put("eventType", trt_map.get("eventType"));
             jsonObject.put("enteredBy", trt_map.get("enteredBy"));
             if (trt_map.containsKey("carbs")) {
@@ -243,6 +301,9 @@ public class NSClientReceiver extends BroadcastReceiver {
             }
             if (trt_map.containsKey("insulin")) {
                 jsonObject.put("insulin", trt_map.get("insulin"));
+            }
+            if (trt_map.containsKey("insulinJSON")) {
+                jsonObject.put("insulinInjections", trt_map.get("insulinJSON"));
             }
             if (trt_map.containsKey("notes")) {
                 jsonObject.put("notes", trt_map.get("notes"));

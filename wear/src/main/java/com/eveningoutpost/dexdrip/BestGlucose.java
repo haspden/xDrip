@@ -8,12 +8,12 @@ import android.text.style.ForegroundColorSpan;
 import android.text.style.StrikethroughSpan;
 import android.util.Log;
 
-import com.eveningoutpost.dexdrip.Models.BgReading;
-import com.eveningoutpost.dexdrip.Models.JoH;
-import com.eveningoutpost.dexdrip.Models.SensorSanity;
-import com.eveningoutpost.dexdrip.Models.UserError;
-import com.eveningoutpost.dexdrip.UtilityModels.BgGraphBuilder;
-import com.eveningoutpost.dexdrip.UtilityModels.Pref;
+import com.eveningoutpost.dexdrip.models.BgReading;
+import com.eveningoutpost.dexdrip.models.JoH;
+import com.eveningoutpost.dexdrip.models.SensorSanity;
+import com.eveningoutpost.dexdrip.models.UserError;
+import com.eveningoutpost.dexdrip.utilitymodels.BgGraphBuilder;
+import com.eveningoutpost.dexdrip.utilitymodels.Pref;
 import com.eveningoutpost.dexdrip.calibrations.CalibrationAbstract;
 import com.eveningoutpost.dexdrip.utils.DexCollectionType;
 
@@ -80,17 +80,23 @@ public class BestGlucose {
             return this.stale;
         }
 
+        // return boolean if data would be considered stale
+        public boolean isReallyStale() {
+                return this.mssince > (Home.stale_data_millis()*3);
+        }
+
+
         // is this value above the "High" preference value
         public boolean isHigh() {
             if (this.highMark == null)
-                this.highMark = JoH.tolerantParseDouble(prefs.getString("highValue", "170"));
+                this.highMark = JoH.tolerantParseDouble(prefs.getString("highValue", "170"), 170d);
             return this.unitized_value >= this.highMark;
         }
 
         // is this value below the "Low" preference value
         public boolean isLow() {
             if (this.lowMark == null)
-                this.lowMark = JoH.tolerantParseDouble(prefs.getString("lowValue", "70"));
+                this.lowMark = JoH.tolerantParseDouble(prefs.getString("lowValue", "70"), 70d);
             return this.unitized_value <= this.lowMark;
         }
 

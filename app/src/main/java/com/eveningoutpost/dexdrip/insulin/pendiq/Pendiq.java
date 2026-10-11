@@ -6,9 +6,9 @@ package com.eveningoutpost.dexdrip.insulin.pendiq;
 
 import android.content.Intent;
 
-import com.eveningoutpost.dexdrip.Models.JoH;
-import com.eveningoutpost.dexdrip.UtilityModels.PersistentStore;
-import com.eveningoutpost.dexdrip.UtilityModels.Pref;
+import com.eveningoutpost.dexdrip.models.JoH;
+import com.eveningoutpost.dexdrip.utilitymodels.PersistentStore;
+import com.eveningoutpost.dexdrip.utilitymodels.Pref;
 import com.eveningoutpost.dexdrip.xdrip;
 
 import static com.eveningoutpost.dexdrip.insulin.pendiq.Const.MINIMUM_DOSE;
@@ -88,15 +88,15 @@ public class Pendiq {
 
     public static boolean handleTreatment(double insulin) {
         if (insulin > 0) {
-            if (insulin >= MINIMUM_DOSE) {
-                if (enabled() && Pref.getBooleanDefaultFalse("pendiq_send_treatments")) {
+            if (enabled() && Pref.getBooleanDefaultFalse("pendiq_send_treatments")) {
+                if (insulin >= MINIMUM_DOSE) {
                     if (JoH.ratelimit("pendiq-dose-prep", 20)) {
                         sendInstruction(PENDIQ_COMMAND_DOSE_PREP, "" + insulin);
                     }
                     return true;
+                } else {
+                    JoH.static_toast_long("Insulin dose below minimum of: " + MINIMUM_DOSE + "U for Pendiq");
                 }
-            } else {
-                JoH.static_toast_long("Insulin dose below minimum of: " + MINIMUM_DOSE + "U");
             }
         }
         return false;

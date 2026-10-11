@@ -4,7 +4,17 @@ package com.eveningoutpost.dexdrip;
 // TODO stop alert notification for swiped alerts
 
 
+import static android.app.PendingIntent.FLAG_UPDATE_CURRENT;
+import static com.eveningoutpost.dexdrip.Home.SHOWCASE_REMINDER3;
+import static com.eveningoutpost.dexdrip.models.JoH.dateTimeText;
+import static com.eveningoutpost.dexdrip.models.JoH.hourMinuteString;
+import static com.eveningoutpost.dexdrip.models.JoH.msSince;
+import static com.eveningoutpost.dexdrip.models.JoH.niceTimeScalarNatural;
+import static com.eveningoutpost.dexdrip.models.JoH.tsl;
+import static lecho.lib.hellocharts.animation.ChartDataAnimator.DEFAULT_ANIMATION_DURATION;
+
 import android.animation.ValueAnimator;
+import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.app.PendingIntent;
@@ -17,18 +27,18 @@ import android.hardware.Sensor;
 import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
 import android.hardware.SensorManager;
-import android.media.MediaPlayer;
 import android.media.RingtoneManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.PowerManager;
-import android.support.annotation.NonNull;
-import android.support.v4.app.ActivityCompat;
-import android.support.v4.content.ContextCompat;
-import android.support.v7.widget.CardView;
-import android.support.v7.widget.RecyclerView;
-import android.support.v7.widget.helper.ItemTouchHelper;
+import androidx.annotation.NonNull;
+import androidx.cardview.widget.CardView;
+import androidx.core.app.ActivityCompat;
+import androidx.core.content.ContextCompat;
+import androidx.recyclerview.widget.ItemTouchHelper;
+import androidx.recyclerview.widget.RecyclerView;
+
 import android.text.Editable;
 import android.text.InputType;
 import android.text.TextWatcher;
@@ -56,18 +66,22 @@ import android.widget.RadioButton;
 import android.widget.RelativeLayout;
 import android.widget.TextView;
 
-import com.eveningoutpost.dexdrip.Models.JoH;
-import com.eveningoutpost.dexdrip.Models.Reminder;
-import com.eveningoutpost.dexdrip.Models.UserError;
-import com.eveningoutpost.dexdrip.UtilityModels.Constants;
-import com.eveningoutpost.dexdrip.UtilityModels.JamorhamShowcaseDrawer;
-import com.eveningoutpost.dexdrip.UtilityModels.NotificationChannels;
-import com.eveningoutpost.dexdrip.UtilityModels.PersistentStore;
-import com.eveningoutpost.dexdrip.UtilityModels.Pref;
-import com.eveningoutpost.dexdrip.UtilityModels.ShotStateStore;
+import com.eveningoutpost.dexdrip.models.JoH;
+import com.eveningoutpost.dexdrip.models.Reminder;
+import com.eveningoutpost.dexdrip.models.Treatments;
+import com.eveningoutpost.dexdrip.models.UserError;
+import com.eveningoutpost.dexdrip.utilitymodels.Constants;
+import com.eveningoutpost.dexdrip.utilitymodels.JamorhamShowcaseDrawer;
+import com.eveningoutpost.dexdrip.utilitymodels.NotificationChannels;
+import com.eveningoutpost.dexdrip.utilitymodels.PersistentStore;
+import com.eveningoutpost.dexdrip.utilitymodels.Pref;
+import com.eveningoutpost.dexdrip.utilitymodels.ShotStateStore;
+import com.eveningoutpost.dexdrip.utilitymodels.SpeechUtil;
 import com.eveningoutpost.dexdrip.profileeditor.DatePickerFragment;
 import com.eveningoutpost.dexdrip.profileeditor.ProfileAdapter;
 import com.eveningoutpost.dexdrip.profileeditor.TimePickerFragment;
+import com.eveningoutpost.dexdrip.receiver.ReminderReceiver;
+import com.eveningoutpost.dexdrip.utils.HomeWifi;
 import com.github.amlcurran.showcaseview.OnShowcaseEventListener;
 import com.github.amlcurran.showcaseview.ShowcaseView;
 import com.github.amlcurran.showcaseview.targets.ViewTarget;
@@ -80,8 +94,7 @@ import java.util.Timer;
 import java.util.TimerTask;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-import static com.eveningoutpost.dexdrip.Home.SHOWCASE_REMINDER3;
-import static lecho.lib.hellocharts.animation.ChartDataAnimator.DEFAULT_ANIMATION_DURATION;
+import lombok.val;
 
 // TODO swipe right reschedule options
 // TODO wake up option
@@ -89,7 +102,7 @@ import static lecho.lib.hellocharts.animation.ChartDataAnimator.DEFAULT_ANIMATIO
 public class Reminders extends ActivityWithRecycler implements SensorEventListener {
 
     private static final String TAG = "Reminders";
-    private static final int NOTIFICATION_ID = 765;
+    public static final int NOTIFICATION_ID = 765;
     private static final String REMINDER_WAKEUP = "REMINDER_WAKEUP";
     private static final int MY_PERMISSIONS_REQUEST_STORAGE = 139;
     private static final int REQUEST_CODE_CHOOSE_FILE = 2;
@@ -101,12 +114,14 @@ public class Reminders extends ActivityWithRecycler implements SensorEventListen
     private static final boolean d = true;
 
     public final List<Reminder> reminders = new ArrayList<>();
+    public static final String REMINDER_ACTION = "reminder";
 
     private AlertDialog dialog;
     private EditText reminderDaysEdt;
     private View dialogView;
     private CardView floatingsnooze;
     private TextView floaterText;
+    private TextView swipePromptText;
     private boolean floaterHidden = true;
     private String selectedSound;
 
@@ -116,7 +131,7 @@ public class Reminders extends ActivityWithRecycler implements SensorEventListen
     private long default_snooze = Constants.MINUTE_IN_MS * 30;
     private SensorManager mSensorManager;
     private Sensor mProximity;
-    private boolean proximity = true; // default to near
+    private static volatile boolean proximity = true; // default to near
     private int proximity_events = 0;
     private int highlighted = 0;
 
@@ -124,6 +139,7 @@ public class Reminders extends ActivityWithRecycler implements SensorEventListen
     MenuItem remindersDisabledMenuItem;
     MenuItem remindersAdvancedMenuItem;
     MenuItem remindersRestartTomorrowMenuItem;
+    MenuItem remindersCancelByDefaultMenuItem;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -134,12 +150,12 @@ public class Reminders extends ActivityWithRecycler implements SensorEventListen
         //setSupportActionBar((Toolbar)findViewById(R.id.reminder_toolbar));
         JoH.fixActionBar(this);
 
-        setTitle("xDrip+ Reminders");
+        setTitle(getString(R.string.xdrip_reminders));
         // TODO subtitle with summary
         recyclerView = (RecyclerView) findViewById(R.id.reminder_recycler);
         floatingsnooze = (CardView) findViewById(R.id.floatingsnooze);
         floaterText = (TextView) findViewById(R.id.floaterText);
-
+        swipePromptText = (TextView) findViewById(R.id.reminders_info);
         floatingsnooze.setVisibility(View.GONE);
 
         mSensorManager = (SensorManager) getSystemService(Context.SENSOR_SERVICE);
@@ -184,6 +200,11 @@ public class Reminders extends ActivityWithRecycler implements SensorEventListen
         updateMenuCheckboxes();
     }
 
+    public void onCancelByDefaultClick(MenuItem v) {
+        invertPreferenceBoolean(Reminder.REMINDERS_CANCEL_DEFAULT);
+        updateMenuCheckboxes();
+    }
+
     public void onRestartTomorrowClick(MenuItem v) {
         invertPreferenceBoolean(Reminder.REMINDERS_RESTART_TOMORROW);
         updateMenuCheckboxes();
@@ -193,6 +214,11 @@ public class Reminders extends ActivityWithRecycler implements SensorEventListen
         invertPreferenceBoolean(Reminder.REMINDERS_ADVANCED_MODE);
         updateMenuCheckboxes();
     }
+
+    public void onRemindersHomeNetworkClick(MenuItem item) {
+        HomeWifi.ask(this);
+    }
+
 
     private void invertPreferenceBoolean(String pref) {
         Pref.setBoolean(pref, !Pref.getBooleanDefaultFalse(pref));
@@ -204,6 +230,15 @@ public class Reminders extends ActivityWithRecycler implements SensorEventListen
         remindersRestartTomorrowMenuItem.setChecked(Pref.getBooleanDefaultFalse(Reminder.REMINDERS_RESTART_TOMORROW));
         remindersDisabledAtNightMenuItem.setChecked(Pref.getBooleanDefaultFalse(Reminder.REMINDERS_NIGHT_DISABLED));
         remindersRestartTomorrowMenuItem.setEnabled(remindersDisabledMenuItem.isChecked());
+        remindersCancelByDefaultMenuItem.setChecked(Pref.getBooleanDefaultFalse(Reminder.REMINDERS_CANCEL_DEFAULT));
+    }
+
+    private void handleSwipePromptVisibility() {
+        if (reminders.size() > 0) {
+            swipePromptText.setVisibility(View.VISIBLE);
+        } else {
+            swipePromptText.setVisibility(View.GONE);
+        }
     }
 
     @Override
@@ -213,6 +248,7 @@ public class Reminders extends ActivityWithRecycler implements SensorEventListen
         remindersDisabledMenuItem = menu.findItem(R.id.reminders_disabled);
         remindersRestartTomorrowMenuItem = menu.findItem(R.id.reminders_restart);
         remindersAdvancedMenuItem = menu.findItem(R.id.reminders_advanced);
+        remindersCancelByDefaultMenuItem = menu.findItem(R.id.reminders_cancel_default);
 
         updateMenuCheckboxes();
 
@@ -231,6 +267,7 @@ public class Reminders extends ActivityWithRecycler implements SensorEventListen
         mSensorManager.registerListener(this, mProximity, SensorManager.SENSOR_DELAY_NORMAL);
         highlighted = 0;
         reloadList();
+        handleSwipePromptVisibility();
         // intentionally do not release wakelock
     }
 
@@ -277,8 +314,11 @@ public class Reminders extends ActivityWithRecycler implements SensorEventListen
     private void reloadList() {
         reminders.clear();
         reminders.addAll(Reminder.getAllReminders());
-        mAdapter.notifyDataSetChanged();
+        if (mAdapter != null) {
+            mAdapter.notifyDataSetChanged();
+        }
     }
+
 
     // View holder
     public class MyViewHolder extends ActivityWithRecycler.MyViewHolder {
@@ -355,7 +395,7 @@ public class Reminders extends ActivityWithRecycler implements SensorEventListen
         }
 
         @Override
-        public void onBindViewHolder(final ActivityWithRecycler.MyViewHolder base_holder, int position) {
+        public void onBindViewHolder(final ActivityWithRecycler.MyViewHolder base_holder, @SuppressLint("RecyclerView") int position) {
             final MyViewHolder holder = (MyViewHolder) base_holder; // cast it
             final Reminder reminder_item = reminders.get(position);
             holder.position = position; // should we use getadapterposition instead?
@@ -364,19 +404,19 @@ public class Reminders extends ActivityWithRecycler implements SensorEventListen
 
             String lastDetails = "";
             if (reminder_item.fired_times > 0) {
-                if (JoH.msSince(reminder_item.last_fired) < Constants.DAY_IN_MS) {
-                    lastDetails += "last " + JoH.hourMinuteString(reminder_item.last_fired);
+                if (msSince(reminder_item.last_fired) < Constants.DAY_IN_MS) {
+                    lastDetails += xdrip.getAppContext().getString(R.string.last) + " " + JoH.hourMinuteString(reminder_item.last_fired);
                 } else {
-                    lastDetails += "last " + JoH.dateTimeText(reminder_item.last_fired);
+                    lastDetails += xdrip.getAppContext().getString(R.string.last) + " " + dateTimeText(reminder_item.last_fired);
                 }
-                lastDetails += " (x" + reminder_item.fired_times + ") next";
+                lastDetails += " (x" + reminder_item.fired_times + ") " + xdrip.getAppContext().getString(R.string.next);
             }
             String nextDetails = "";
             if (reminder_item.enabled) {
-                if (Math.abs(JoH.msSince(reminder_item.next_due)) < Constants.DAY_IN_MS) {
+                if (Math.abs(msSince(reminder_item.next_due)) < Constants.DAY_IN_MS) {
                     nextDetails += JoH.hourMinuteString(reminder_item.next_due);
                 } else {
-                    final String dstring = JoH.dateTimeText(reminder_item.next_due);
+                    final String dstring = dateTimeText(reminder_item.next_due);
                     nextDetails += dstring.substring(0, dstring.length() - 3); // remove seconds
                 }
             }
@@ -387,26 +427,26 @@ public class Reminders extends ActivityWithRecycler implements SensorEventListen
             String firstpart = "";
             if (reminder_item.enabled) {
                 holder.wholeBlock.setAlpha(1.0f);
-                if ((reminder_item.snoozed_till > JoH.tsl()) && (reminder_item.next_due < JoH.tsl())) {
-                    firstpart = "Snoozed for " + JoH.niceTimeTill(reminder_item.snoozed_till);
+                if ((reminder_item.snoozed_till > tsl()) && (reminder_item.next_due < tsl())) {
+                    firstpart = xdrip.getAppContext().getString(R.string.snoozed_for) +" " + JoH.niceTimeTill(reminder_item.snoozed_till);
                 } else {
                     if (duein >= 0) {
                         String natural_due = JoH.niceTimeScalarNatural(duein);
                         if (natural_due.matches("^[0-9]+.*")) {
-                            natural_due = "in" + " " + natural_due;
+                            natural_due = xdrip.getAppContext().getString(R.string.in) + " " + natural_due;
                         }
-                        firstpart = "Due " + natural_due;
+                        firstpart = xdrip.getAppContext().getString(R.string.due) +" " + natural_due;
                     } else {
-                        firstpart = "DUE " + JoH.hourMinuteString(reminder_item.next_due);
+                        firstpart = xdrip.getAppContext().getString(R.string.due_uppercase) + " " + JoH.hourMinuteString(reminder_item.next_due);
                         holder.wholeBlock.setBackgroundColor(Color.parseColor("#660066"));
                         highlighted++;
                     }
                 }
             } else {
-                firstpart = "Completed ";
+                firstpart = xdrip.getAppContext().getString(R.string.completed) + " ";
                 holder.wholeBlock.setAlpha(0.3f);
             }
-            holder.next_due_text.setText(firstpart + (reminder_item.repeating ? ", repeats every " + JoH.niceTimeScalarRedux(reminder_item.period) : ""));
+            holder.next_due_text.setText(firstpart + (reminder_item.repeating ? ", " + xdrip.getAppContext().getString(R.string.repeats_every) + " " + JoH.niceTimeScalarRedux(reminder_item.period) : ""));
 
         }
 
@@ -430,107 +470,147 @@ public class Reminders extends ActivityWithRecycler implements SensorEventListen
             last_undo = cloner.deepClone(remind);
             if (SimpleItemTouchHelperCallback.last_swipe_direction == ItemTouchHelper.LEFT) {
 
-                // swipe left
+                // swipe left == snooze
                 snoozeReminder(remind, remind.last_snoozed_for > 0 ? remind.last_snoozed_for : default_snooze);
 
                 last_swiped = remind;
-                last_undo_pos = position;
+                //last_undo_pos = position;
                 reminders.remove(position);
                 notifyItemRemoved(position);
                 cancelAlert();
                 showSnoozeFloater();
+                reinjectDelayed(remind);
             } else {
-                // swipe right
-
-                if (remind.repeating || !remind.isDue()) {
-                    remind.schedule_next();
-                    setFloaterText(remind.getTitle() + " next in " + JoH.niceTimeTill(remind.next_due));
-                } else if (!remind.repeating) {
-                    setFloaterText(remind.getTitle() + " completed");
-                    remind.enabled = false;
-                    remind.save();
-                }
-
+                // swipe right == reschedule
+                cancelAlert();
                 last_swiped = remind;
-                last_undo_pos = position;
+                if (!rescheduleOrCancelReminder(remind)) {
+                    reinjectDelayed(remind);
+                }
+                // as we swiped off in UI we always must reinject
                 reminders.remove(position);
                 notifyItemRemoved(position);
-                cancelAlert();
-                showSnoozeFloater();
             }
-            JoH.runOnUiThreadDelayed(new Runnable() {
-                @Override
-                public void run() {
-                    reinject(remind);
-                }
-            }, 500);
         }
+    }
 
+    private void reinjectDelayed(Reminder remind) {
+        JoH.runOnUiThreadDelayed(() -> reinject(remind), 500);
     }
 
     private void snoozeReminder(Reminder remind, long snooze_time) {
         if (remind == null) return;
         remind.last_snoozed_for = snooze_time;
         if (remind.isDue()) {
-            remind.snoozed_till = JoH.tsl() + snooze_time;
-            setFloaterText(remind.getTitle() + " snoozed for " + JoH.niceTimeScalar(snooze_time));
+            remind.snoozed_till = tsl() + snooze_time;
+            setFloaterText(remind.getTitle() + " " + xdrip.getAppContext().getString(R.string.snoozed_for) + " " + JoH.niceTimeScalar(snooze_time));
         } else {
             remind.snoozed_till = remind.next_due + snooze_time;
-            setFloaterText(remind.getTitle() + " postponed for " + JoH.niceTimeScalar(snooze_time));
+            setFloaterText(remind.getTitle() + " " + xdrip.getAppContext().getString(R.string.postponed_for) + " " + JoH.niceTimeScalar(snooze_time));
         }
         remind.save();
     }
+
+    private void updateFloaterForReschedule(final Reminder remind) {
+        setFloaterText(remind.getTitle() + " " + xdrip.getAppContext().getString(R.string.next_in) + " " + JoH.niceTimeTill(remind.next_due));
+        reinjectDelayed(remind);
+        showSnoozeFloater();
+
+    }
+
+    private void rescheduleNextOld(final Reminder remind) {
+        remind.schedule_next();
+        updateFloaterForReschedule(remind);
+    }
+
+    private void rescheduleNextNew(final Reminder remind, long when) {
+        remind.schedule_next(when);
+        updateFloaterForReschedule(remind);
+    }
+
+
+    private boolean rescheduleOrCancelReminder(final Reminder remind) {
+        if (remind.repeating || !remind.isDue()) {
+            if (remind.isOverdue()) {
+               askWhenToReschedule(remind);
+                return false;
+            } else {
+               rescheduleNextOld(remind);
+            }
+        } else if (!remind.repeating) {
+            setFloaterText(remind.getTitle() + " " + xdrip.getAppContext().getString(R.string.completed));
+            remind.enabled = false;
+            remind.save();
+        }
+        return true;
+    }
+
+    private void askWhenToReschedule(final Reminder remind) {
+        try {
+            val now = tsl();
+            val oldt = remind.getPotentialNextSchedule();
+            val newt = now + remind.period;
+            val choice = String.format("%s:    %s  @  %s\n\nor\n\n%s:   %s  @  %s",
+                    xdrip.gs(R.string.old), niceTimeScalarNatural(-msSince(oldt)), hourMinuteString(oldt),
+                    xdrip.gs(R.string.neww), niceTimeScalarNatural(-msSince(newt)), hourMinuteString(newt));
+
+            val builder = new AlertDialog.Builder(this)
+                    .setTitle(R.string.reschedule_with_new_timing)
+                    .setMessage(choice);
+
+            builder.setPositiveButton(xdrip.gs(R.string.old), (dialog, which) -> rescheduleNextOld(remind));
+            builder.setNegativeButton(xdrip.gs(R.string.neww), (dialog, which) -> rescheduleNextNew(remind, newt));
+
+            val dialog = builder.create();
+            try {
+                if (dialog.isShowing()) {
+                    dialog.dismiss();
+                }
+            } catch (Exception e) {
+                //
+            }
+            dialog.show();
+        } catch (Exception e) {
+            UserError.Log.e(TAG, "Got exception in askWhenToReschedule: " + e);
+        }
+    }
+
 
     //////////// Button pushes
     public void newReminder(View v) {
         showReminderDialog(v, null, 0);
     }
 
-    private synchronized MediaPlayer playSelectedSound() {
-        return JoH.playSoundUri((selectedSound != null) ? selectedSound : JoH.getResourceURI(R.raw.reminder_default_notification));
+    private synchronized void playSelectedSound() {
+        JoH.playSoundUri((selectedSound != null) ? selectedSound : JoH.getResourceURI(R.raw.reminder_default_notification));
     }
 
     public void chooseReminderSound(View v) {
-        final MediaPlayer player = playSelectedSound();
+        playSelectedSound();
 
         AlertDialog.Builder builder = new AlertDialog.Builder(this);
-        builder.setTitle("Select new sound source")
-                .setOnDismissListener(new DialogInterface.OnDismissListener() {
-                    @Override
-                    public void onDismiss(DialogInterface dialog) {
-                        try {
-                            player.stop();
-                            player.release();
-                        } catch (Exception e) {
-                            //
-                        }
-                    }
+        builder.setTitle(R.string.select_new_sound_source)
+                .setOnDismissListener(dialog -> {
+                        JoH.stopSoundUri();
                 })
-                .setItems(R.array.reminderAlertType, new DialogInterface.OnClickListener() {
-                    public void onClick(DialogInterface dialog, int which) {
-                        try {
-                            player.stop();
-                            player.release();
-                        } catch (Exception e) {
-                            //
+                .setItems(R.array.reminderAlertType, (dialog, which) -> {
+                    JoH.stopSoundUri();
+                    if (which == 0) {
+                        final Intent intent = new Intent(RingtoneManager.ACTION_RINGTONE_PICKER);
+                        intent.putExtra(RingtoneManager.EXTRA_RINGTONE_TITLE, xdrip.getAppContext().getString(R.string.select_tone_alert));
+                        intent.putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_SILENT, true);
+                        intent.putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_DEFAULT, true);
+                        intent.putExtra(RingtoneManager.EXTRA_RINGTONE_TYPE, RingtoneManager.TYPE_ALL);
+                        startActivityForResult(intent, REQUEST_CODE_CHOOSE_RINGTONE);
+                    } else if (which == 1) {
+                        if (checkPermissions()) {
+                            chooseFile();
                         }
-                        if (which == 0) {
-                            final Intent intent = new Intent(RingtoneManager.ACTION_RINGTONE_PICKER);
-                            intent.putExtra(RingtoneManager.EXTRA_RINGTONE_TITLE, "Select tone for Alert:");
-                            intent.putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_SILENT, true);
-                            intent.putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_DEFAULT, true);
-                            intent.putExtra(RingtoneManager.EXTRA_RINGTONE_TYPE, RingtoneManager.TYPE_ALL);
-                            startActivityForResult(intent, REQUEST_CODE_CHOOSE_RINGTONE);
-                        } else if (which == 1) {
-                            if (checkPermissions()) {
-                                chooseFile();
-                            }
-                        } else {
-                            JoH.static_toast_long("Using default sound");
-                            selectedSound = null;
-                            playSelectedSound();
-                            PersistentStore.setString("reminders-last-sound", "");
-                        }
+                    } else {
+                        JoH.static_toast_long(xdrip.getAppContext().getString(R.string.using_default_sound));
+                        selectedSound = null;
+                        playSelectedSound();
+                        PersistentStore.setString("reminders-last-sound", "");
                     }
                 });
         final AlertDialog dialog = builder.create();
@@ -539,9 +619,9 @@ public class Reminders extends ActivityWithRecycler implements SensorEventListen
 
     private void chooseFile() {
         final Intent fileIntent = new Intent();
-        fileIntent.setType("audio/mpeg3");
-        fileIntent.setAction(Intent.ACTION_GET_CONTENT);
-        startActivityForResult(Intent.createChooser(fileIntent, "Select File for Reminder sound"), REQUEST_CODE_CHOOSE_FILE);
+        fileIntent.setType("audio/*");
+        fileIntent.setAction(Intent.ACTION_OPEN_DOCUMENT);
+        startActivityForResult(Intent.createChooser(fileIntent, xdrip.getAppContext().getString(R.string.select_file_reminder_sound)), REQUEST_CODE_CHOOSE_FILE);
     }
 
     private boolean checkPermissions() {
@@ -550,7 +630,7 @@ public class Reminders extends ActivityWithRecycler implements SensorEventListen
                     android.Manifest.permission.WRITE_EXTERNAL_STORAGE)
                     != PackageManager.PERMISSION_GRANTED) {
                 final Activity activity = this;
-                JoH.show_ok_dialog(activity, "Please Allow Permission", "Need storage permission to access all ringtones", new Runnable() {
+                JoH.show_ok_dialog(activity, xdrip.getAppContext().getString(R.string.Please_Allow_Permission), xdrip.getAppContext().getString(R.string.need_storage_permission), new Runnable() {
                     @Override
                     public void run() {
                         ActivityCompat.requestPermissions(activity,
@@ -571,7 +651,7 @@ public class Reminders extends ActivityWithRecycler implements SensorEventListen
             if ((grantResults.length > 0) && (grantResults[0] == PackageManager.PERMISSION_GRANTED)) {
                 chooseFile(); // must be the only functionality which calls for permission
             } else {
-                JoH.static_toast_long(this, "Cannot choose file without storage permission");
+                JoH.static_toast_long(this, xdrip.getAppContext().getString(R.string.cannot_chose_file));
             }
         }
     }
@@ -590,11 +670,12 @@ public class Reminders extends ActivityWithRecycler implements SensorEventListen
                     final Uri selectedFileUri = data.getData();
                     //JoH.static_toast_long(selectedFileUri.toString());
                     try {
+                        getContentResolver().takePersistableUriPermission(selectedFileUri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
                         selectedSound = selectedFileUri.toString();
                         PersistentStore.setString("reminders-last-sound", selectedSound);
                         // play it?
-                    } catch (NullPointerException e) {
-                        JoH.static_toast_long("Problem with sound");
+                    } catch (Exception e) {
+                        JoH.static_toast_long(xdrip.getAppContext().getString(R.string.problem_with_sound) + " " + e.getMessage());
                     }
                 }
             }
@@ -603,7 +684,7 @@ public class Reminders extends ActivityWithRecycler implements SensorEventListen
 
 
     public void snoozeAdjust(View v) {
-        final String button_text = ((Button) v).getText().toString();
+        final String button_text = ((Button) v).getTag().toString(); //changed String to Tag, to make the texts translateable
         Log.d(TAG, "Snooze adjust button: " + button_text);
         long multiplier = Constants.MINUTE_IN_MS;
         final String[] button_textA = button_text.split(" ");
@@ -634,7 +715,7 @@ public class Reminders extends ActivityWithRecycler implements SensorEventListen
         try {
             reminderDaysEdt.setText(Integer.toString(Integer.parseInt(reminderDaysEdt.getText().toString()) + 1));
         } catch (NumberFormatException e) {
-            JoH.static_toast_short("Invalid number");
+            JoH.static_toast_short(xdrip.getAppContext().getString(R.string.invalid_number));
         }
     }
 
@@ -642,7 +723,7 @@ public class Reminders extends ActivityWithRecycler implements SensorEventListen
         try {
             reminderDaysEdt.setText(Integer.toString(Integer.parseInt(reminderDaysEdt.getText().toString()) - 1));
         } catch (NumberFormatException e) {
-            JoH.static_toast_short("Invalid number");
+            JoH.static_toast_short(xdrip.getAppContext().getString(R.string.invalid_number));
         }
         if (reminderDaysEdt.getText().toString().equals("0")) {
             reminderDaysEdt.setText("1");
@@ -652,7 +733,7 @@ public class Reminders extends ActivityWithRecycler implements SensorEventListen
     public synchronized void reminderTrashButton(View v) {
         if (last_undo != null) {
             dismissDoppelgangerItem(last_undo);
-            JoH.static_toast_long("Deleted: " + last_undo.title);
+            JoH.static_toast_long(xdrip.getAppContext().getString(R.string.toast_deleted) + " " + last_undo.title);
             last_undo.delete();
             last_undo = null;
             hideSnoozeFloater();
@@ -672,7 +753,7 @@ public class Reminders extends ActivityWithRecycler implements SensorEventListen
             last_undo = null;
             hideSnoozeFloater();
         } else {
-            JoH.static_toast_short("Nothing to undo!");
+            JoH.static_toast_short(xdrip.getAppContext().getString(R.string.nothing_to_undo));
         }
     }
 
@@ -710,10 +791,15 @@ public class Reminders extends ActivityWithRecycler implements SensorEventListen
 
     private synchronized void reinject(Reminder reminder) {
         if (reminder == null) return;
+        dismissDoppelgangerItem(reminder);
         final int i = reinjectionPosition(reminder);
         // TODO lock?
         Log.d(TAG, "child Reinjection position: " + i);
         reminders.add(i, reminder);
+        if (mAdapter == null) {
+            Log.d(TAG, "Returning from reinject as no UI adapter");
+            return;
+        }
         mAdapter.notifyItemInserted(i);
         final AtomicBoolean corrected = new AtomicBoolean();
 
@@ -728,12 +814,9 @@ public class Reminders extends ActivityWithRecycler implements SensorEventListen
         if (highlighted < 2) {
             Log.d(TAG, "Reinjection: scrolling to: " + i);
             recyclerView.smoothScrollToPosition(i);
-            JoH.runOnUiThreadDelayed(new Runnable() {
-                @Override
-                public void run() {
-                    // failsafe
-                    correctiveScrolling(i, corrected);
-                }
+            JoH.runOnUiThreadDelayed(() -> {
+                // failsafe
+                correctiveScrolling(i, corrected);
             }, 1000);
         } else {
             Log.d(TAG, "Not scrolling due to highlighted: " + highlighted);
@@ -816,6 +899,7 @@ public class Reminders extends ActivityWithRecycler implements SensorEventListen
             rbday.setChecked(PersistentStore.getBoolean("reminders-rbday"));
             rbhour.setChecked(PersistentStore.getBoolean("reminders-rbhour"));
             rbweek.setChecked(PersistentStore.getBoolean("reminders-rbweek"));
+
         } else {
             rbday.setChecked(reminder.isDaysPeriod());
             rbhour.setChecked(reminder.isHoursPeriod());
@@ -862,6 +946,9 @@ public class Reminders extends ActivityWithRecycler implements SensorEventListen
         final CheckBox weekendsCheckbox = (CheckBox) dialogView.findViewById(R.id.weekEndsCheckbox);
         final CheckBox weekdaysCheckbox = (CheckBox) dialogView.findViewById(R.id.weekDaysCheckbox);
         final CheckBox megapriorityCheckbox = (CheckBox) dialogView.findViewById(R.id.highPriorityCheckbox);
+        final CheckBox homeOnlyCheckbox = (CheckBox) dialogView.findViewById(R.id.homeOnlyCheckbox);
+        final CheckBox speechCheckbox = (CheckBox) dialogView.findViewById(R.id.speakCheckbox);
+        final CheckBox graphIconCheckbox = (CheckBox) dialogView.findViewById(R.id.GraphIconCheckbox);
 
         final ImageButton swapButton = (ImageButton) dialogView.findViewById(R.id.reminderSwapButton);
 
@@ -870,6 +957,8 @@ public class Reminders extends ActivityWithRecycler implements SensorEventListen
             repeatingCheckbox.setChecked(PersistentStore.getLong("reminders-last-repeating") != 2);
             chimeOnlyCheckbox.setChecked(PersistentStore.getLong("reminders-last-chimeonly") == 1);
             alternatingCheckbox.setChecked(PersistentStore.getLong("reminders-last-alternating") == 1);
+            homeOnlyCheckbox.setChecked(false); // defaults to false
+
             try {
                 reminderDaysEdt.setText(!PersistentStore.getString("reminders-last-number").equals("") ? Integer.toString(Integer.parseInt(PersistentStore.getString("reminders-last-number"))) : "1");
             } catch (Exception e) {
@@ -890,6 +979,9 @@ public class Reminders extends ActivityWithRecycler implements SensorEventListen
             }
             weekdaysCheckbox.setChecked(reminder.weekdays);
             weekendsCheckbox.setChecked(reminder.weekends);
+            homeOnlyCheckbox.setChecked(reminder.homeonly);
+            speechCheckbox.setChecked(reminder.speak);
+            graphIconCheckbox.setChecked(reminder.graphicon);
             reminderDaysEdt.setText(Long.toString(reminder.periodInUnits()));
         }
 
@@ -908,18 +1000,18 @@ public class Reminders extends ActivityWithRecycler implements SensorEventListen
         repeatingCheckbox.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
             @Override
             public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
-                final String insert = chimeOnlyCheckbox.isChecked() ? "sound once" : "alert until dismissed";
-                final String second_insert = isChecked ? "and then repeat every " + JoH.niceTimeScalarNatural(getPeriod(rbday, rbhour, rbweek)) : "but will not repeat after that";
-                JoH.static_toast_long("Reminder will " + insert + " " + second_insert);
+                final String insert = chimeOnlyCheckbox.isChecked() ? xdrip.getAppContext().getString(R.string.sound_once) : xdrip.getAppContext().getString(R.string.alert_until_dismissed);
+                final String second_insert = isChecked ? xdrip.getAppContext().getString(R.string.and_then_repeat) + " " + JoH.niceTimeScalarNatural(getPeriod(rbday, rbhour, rbweek)) : xdrip.getAppContext().getString(R.string.will_not_repeat);
+                JoH.static_toast_long(xdrip.getAppContext().getString(R.string.reminder_will) + " " + insert + " " + second_insert);
                 maskAlternatingCheckbox(isChecked, alternatingCheckbox);
             }
         });
         chimeOnlyCheckbox.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
             @Override
             public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
-                final String insert = isChecked ? "sound once" : "alert until dismissed";
-                final String second_insert = repeatingCheckbox.isChecked() ? "and then repeat every " + JoH.niceTimeScalar(getPeriod(rbday, rbhour, rbweek)) : "but will not repeat after that";
-                JoH.static_toast_long("Reminder will " + insert + " " + second_insert);
+                final String insert = isChecked ?  xdrip.getAppContext().getString(R.string.sound_once) : xdrip.getAppContext().getString(R.string.alert_until_dismissed);
+                final String second_insert = repeatingCheckbox.isChecked() ? xdrip.getAppContext().getString(R.string.and_then_repeat) + " " + JoH.niceTimeScalar(getPeriod(rbday, rbhour, rbweek)) : xdrip.getAppContext().getString(R.string.will_not_repeat);
+                JoH.static_toast_long(xdrip.getAppContext().getString(R.string.reminder_will) + " " + insert + " " + second_insert);
             }
         });
         alternatingCheckbox.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
@@ -927,17 +1019,17 @@ public class Reminders extends ActivityWithRecycler implements SensorEventListen
             public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
                 alternateEditText.setVisibility(isChecked ? View.VISIBLE : View.GONE);
                 swapButton.setVisibility(isChecked ? View.VISIBLE : View.GONE);
-                final String insert = isChecked ? "alternate between different titles every " + JoH.niceTimeScalar(getPeriod(rbday, rbhour, rbweek)) : "always use the same title";
-                JoH.static_toast_long("Reminder will " + insert);
+                final String insert = isChecked ? xdrip.getAppContext().getString(R.string.alternate_between_titles) + " " + JoH.niceTimeScalar(getPeriod(rbday, rbhour, rbweek)) : xdrip.getAppContext().getString(R.string.always_use_same_title);
+                JoH.static_toast_long(xdrip.getAppContext().getString(R.string.reminder_will) + " " + insert);
             }
         });
 
         alternateEditText.setVisibility(alternatingCheckbox.isChecked() ? View.VISIBLE : View.GONE);
         swapButton.setVisibility(alternatingCheckbox.isChecked() ? View.VISIBLE : View.GONE);
 
-        dialogBuilder.setTitle(((reminder == null) ? "Add" : "Edit") + " " + "Reminder");
+        dialogBuilder.setTitle(((reminder == null) ? xdrip.getAppContext().getString(R.string.title_add_reminder) : xdrip.getAppContext().getString(R.string.title_edit_reminder)));
         //dialogBuilder.setMessage("Enter text below");
-        dialogBuilder.setPositiveButton("Done", new DialogInterface.OnClickListener() {
+        dialogBuilder.setPositiveButton(xdrip.getAppContext().getString(R.string.done), new DialogInterface.OnClickListener() {
             public void onClick(DialogInterface dialog, int whichButton) {
                 String reminder_title = titleEditText.getText().toString().trim();
                 Log.d(TAG, "Got reminder title: " + reminder_title);
@@ -972,6 +1064,10 @@ public class Reminders extends ActivityWithRecycler implements SensorEventListen
 
                     new_reminder.weekdays = weekdaysCheckbox.isChecked();
                     new_reminder.weekends = weekendsCheckbox.isChecked();
+                    new_reminder.homeonly = homeOnlyCheckbox.isChecked();
+                    new_reminder.speak = speechCheckbox.isChecked();
+                    new_reminder.graphicon = graphIconCheckbox.isChecked();
+
 
                     if ((new_reminder.priority > MEGA_PRIORITY) && (!megapriorityCheckbox.isChecked())) {
                         new_reminder.priority -= MEGA_PRIORITY;
@@ -990,7 +1086,7 @@ public class Reminders extends ActivityWithRecycler implements SensorEventListen
 
                     showcase(activity, Home.SHOWCASE_REMINDER2);
                 } else {
-                    JoH.static_toast_long("Something went wrong creating the reminder");
+                    JoH.static_toast_long(xdrip.getAppContext().getString(R.string.something_went_wrong_reminder));
                 }
 
                 dialog = null;
@@ -1070,6 +1166,10 @@ public class Reminders extends ActivityWithRecycler implements SensorEventListen
     ////
     public static void doAlert(final Reminder reminder) {
         final PowerManager.WakeLock wl = JoH.getWakeLock("reminder-alert-wakeup", 20000);
+        if (JoH.isOngoingCall()) {
+            UserError.Log.uel(TAG, "Not alerting due to ongoing call");
+            return;
+        }
         Log.d(TAG, "Scheduling alert reminder in 10 seconds time");
         // avoid conflicts with other notification alerts in first 10 seconds
 
@@ -1086,15 +1186,25 @@ public class Reminders extends ActivityWithRecycler implements SensorEventListen
             public void run() {
                 Log.d(TAG, "delayed alert firing");
                 final Intent notificationIntent = new Intent(xdrip.getAppContext(), Reminders.class).putExtra("reminder_id", reminder.getId().toString());
-                final Intent notificationDeleteIntent = new Intent(xdrip.getAppContext(), Reminders.class).putExtra("snooze_id", reminder.getId()).putExtra("snooze", "true");
-                final PendingIntent deleteIntent = PendingIntent.getActivity(xdrip.getAppContext(), NOTIFICATION_ID + 1, notificationDeleteIntent, 0);
-                final PendingIntent pendingIntent = PendingIntent.getActivity(xdrip.getAppContext(), NOTIFICATION_ID, notificationIntent, 0);
+                //final Intent notificationDeleteIntent = new Intent(xdrip.getAppContext(), Reminders.class).putExtra("snooze_id", reminder.getId()).putExtra(Pref.getBooleanDefaultFalse(Reminder.REMINDERS_CANCEL_DEFAULT) ? "cancel" : "snooze", "true");
+                final Intent notificationDeleteIntent = new Intent(xdrip.getAppContext(), ReminderReceiver.class)
+                        .setAction(REMINDER_ACTION)
+                        .putExtra("snooze_id", reminder.getId())
+                        .putExtra(Pref.getBooleanDefaultFalse(Reminder.REMINDERS_CANCEL_DEFAULT) ? "cancel" : "snooze", "true");
+                final PendingIntent deleteIntent = PendingIntent.getBroadcast(xdrip.getAppContext(), NOTIFICATION_ID + 1, notificationDeleteIntent, FLAG_UPDATE_CURRENT);
+                final PendingIntent pendingIntent = PendingIntent.getActivity(xdrip.getAppContext(), NOTIFICATION_ID, notificationIntent, FLAG_UPDATE_CURRENT);
 
+                if (reminder.graphicon) {
+                    Treatments.create_note("Reminder"+": " + reminder.getTitle(), tsl());
+                }
 
-                JoH.showNotification(reminder.getTitle(), "Reminder due " + JoH.hourMinuteString(reminder.next_due), pendingIntent, NOTIFICATION_ID, NotificationChannels.REMINDER_CHANNEL, true, true, deleteIntent, JoH.isOngoingCall() ? null : (reminder.sound_uri != null) ? Uri.parse(reminder.sound_uri) : Uri.parse(JoH.getResourceURI(R.raw.reminder_default_notification)), null);
+                JoH.showNotification(reminder.getTitle(), xdrip.getAppContext().getString(R.string.reminder_due) + " " + JoH.hourMinuteString(reminder.next_due), pendingIntent, NOTIFICATION_ID, NotificationChannels.OTHER_ALERTS_CHANNEL, true, true, deleteIntent, JoH.isOngoingCall() ? null : (reminder.sound_uri != null) ? Uri.parse(reminder.sound_uri) : Uri.parse(JoH.getResourceURI(R.raw.reminder_default_notification)), null);
 
                 //    JoH.showNotification(reminder.getTitle(), "Reminder due " + JoH.hourMinuteString(reminder.next_due), pendingIntent, NOTIFICATION_ID, true, true, deleteIntent, JoH.isOngoingCall() ? null : (reminder.sound_uri != null) ? Uri.parse(reminder.sound_uri) : Uri.parse(JoH.getResourceURI(R.raw.reminder_default_notification)));
-                UserError.Log.ueh("Reminder Alert", reminder.getTitle() + " due: " + JoH.dateTimeText(reminder.next_due) + ((reminder.snoozed_till > reminder.next_due) ? " snoozed till: " + JoH.dateTimeText(reminder.snoozed_till) : ""));
+                UserError.Log.ueh("Reminder Alert", reminder.getTitle() + " due: " + dateTimeText(reminder.next_due) + ((reminder.snoozed_till > reminder.next_due) ? " snoozed till: " + dateTimeText(reminder.snoozed_till) : ""));
+                if (reminder.speak) {
+                    SpeechUtil.say(reminder.getTitle(), 1000, 3);
+                }
                 reminder.notified();
             }
         }, 10000);
@@ -1121,7 +1231,7 @@ public class Reminders extends ActivityWithRecycler implements SensorEventListen
 
         final TimePickerFragment timePickerFragment = new TimePickerFragment();
         timePickerFragment.setTime(calendar.get(Calendar.HOUR_OF_DAY), calendar.get(Calendar.MINUTE));
-        timePickerFragment.setTitle("What time of day?");
+        timePickerFragment.setTitle(xdrip.getAppContext().getString(R.string.title_what_time_day));
         timePickerFragment.setTimeCallback(new ProfileAdapter.TimePickerCallbacks() {
             @Override
             public void onTimeUpdated(int newmins) {
@@ -1140,9 +1250,9 @@ public class Reminders extends ActivityWithRecycler implements SensorEventListen
         if (JoH.msTill(reminder.next_due) > Constants.DAY_IN_MS) {
             final DatePickerFragment datePickerFragment = new DatePickerFragment();
             datePickerFragment.setAllowFuture(true);
-            datePickerFragment.setEarliestDate(JoH.tsl());
+            datePickerFragment.setEarliestDate(tsl());
             datePickerFragment.setInitiallySelectedDate(reminder.next_due);
-            datePickerFragment.setTitle("Which day?");
+            datePickerFragment.setTitle(xdrip.getAppContext().getString(R.string.title_which_day));
             datePickerFragment.setDateCallback(new ProfileAdapter.DatePickerCallbacks() {
                 @Override
                 public void onDateSet(int year, int month, int day) {
@@ -1158,24 +1268,32 @@ public class Reminders extends ActivityWithRecycler implements SensorEventListen
 
     private synchronized void hideSnoozeFloater() {
         if (!floaterHidden) {
-            animateSnoozeFloater(0, floatingsnooze.getHeight(), new AccelerateInterpolator(1.5f));
+            if (floatingsnooze != null) {
+                animateSnoozeFloater(0, floatingsnooze.getHeight(), new AccelerateInterpolator(1.5f));
+            }
             floaterHidden = true;
         }
     }
 
     private synchronized void showSnoozeFloater() {
         if (floaterHidden) {
-            animateSnoozeFloater(floatingsnooze.getHeight(), 0, new DecelerateInterpolator(1.5f));
             floaterHidden = false;
-            floatingsnooze.setVisibility(View.VISIBLE);
-            showcase(this, SHOWCASE_REMINDER3);
+            if (floatingsnooze != null) {
+                animateSnoozeFloater(floatingsnooze.getHeight(), 0, new DecelerateInterpolator(1.5f));
+                floatingsnooze.setVisibility(View.VISIBLE);
+                showcase(this, SHOWCASE_REMINDER3);
+            }
         }
         hideKeyboard(recyclerView);
     }
 
     private void setFloaterText(String msg) {
         Log.d(TAG, "Setting floater text:" + msg);
-        floaterText.setText(msg);
+        try {
+            floaterText.setText(msg);
+        } catch (Exception e) {
+            UserError.Log.e(TAG, "Unable to set floater text to: " + msg);
+        }
     }
 
     private void animateSnoozeFloater(float start, float end, Interpolator interpolator) {
@@ -1201,7 +1319,7 @@ public class Reminders extends ActivityWithRecycler implements SensorEventListen
     }
 
 
-    private void processIncomingBundle(Bundle bundle) {
+    public void processIncomingBundle(Bundle bundle) {
         final PowerManager.WakeLock wl = JoH.getWakeLock("reminder-bundler", 10000);
         if (bundle != null) {
 
@@ -1220,12 +1338,27 @@ public class Reminders extends ActivityWithRecycler implements SensorEventListen
                 Log.d(TAG, "Reminder id for snooze: " + id);
                 final Reminder reminder = Reminder.byid(id);
                 if (reminder != null) {
+                    UserError.Log.uel(TAG, "Reminder snooze for " + reminder.title);
                     final long snooze_time = reminder.last_snoozed_for > 0 ? reminder.last_snoozed_for : default_snooze;
                     snoozeReminder(reminder, snooze_time);
-                    JoH.static_toast_long("Snoozed reminder for " + JoH.niceTimeScalar(snooze_time));
+                    JoH.static_toast_long(xdrip.getAppContext().getString(R.string.snoozed_reminder_for) + " " + JoH.niceTimeScalar(snooze_time));
                     reloadList();
                     hideSnoozeFloater();
                     hideKeyboard(recyclerView);
+                }
+
+            } else if (bundle.getString("cancel") != null) {
+                Log.d(TAG, "Cancel/Reschedule reminder from intent");
+                long id = bundle.getLong("snooze_id");
+                Log.d(TAG, "Reminder id for snooze: " + id);
+                final Reminder reminder = Reminder.byid(id);
+                if (reminder != null) {
+                    UserError.Log.uel(TAG, "Reminder cancel for " + reminder.title);
+                    if (rescheduleOrCancelReminder(reminder)) {
+                        reloadList();
+                        hideSnoozeFloater();
+                        hideKeyboard(recyclerView);
+                    }
                 }
             } else {
                 Log.d(TAG, "Processing non null default bundle");
@@ -1281,7 +1414,7 @@ public class Reminders extends ActivityWithRecycler implements SensorEventListen
                         WindowManager.LayoutParams.FLAG_ALLOW_LOCK_WHILE_SCREEN_ON;
             } else {
                 final PowerManager pm = (PowerManager) xdrip.getAppContext().getSystemService(Context.POWER_SERVICE);
-                PowerManager.WakeLock wl = pm.newWakeLock(PowerManager.FULL_WAKE_LOCK | PowerManager.ACQUIRE_CAUSES_WAKEUP, "reminder-lockscreen");
+                @SuppressLint("InvalidWakeLockTag") PowerManager.WakeLock wl = pm.newWakeLock(PowerManager.FULL_WAKE_LOCK | PowerManager.ACQUIRE_CAUSES_WAKEUP, "reminder-lockscreen");
                 wl.acquire(10000);
                 wakeUpFlags =
                         WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON |
@@ -1327,41 +1460,41 @@ public class Reminders extends ActivityWithRecycler implements SensorEventListen
         switch (which) {
             case Home.SHOWCASE_REMINDER1:
                 target = new ViewTarget(R.id.fab, activity);
-                title = "You have no reminders yet";
-                message = "Reminders can be used for things like pump site changes or anything else.\n\nThey can repeat, be set for various time periods. Be snoozed, postponed, rescheduled etc.\n\nClick the + button to add a reminder.";
+                title = xdrip.getAppContext().getString(R.string.title_You_have_no_reminders_yet);
+                message = xdrip.getAppContext().getString(R.string.message_reminders_explanation);
                 delay = 200;
                 break;
 
             case Home.SHOWCASE_REMINDER2:
                 target = null;
-                title = "Swipe left or right";
-                message = "\u2190 Swipe LEFT to delay or snooze a reminder\n\n\u2192 Swipe RIGHT schedule the next future reminder\n\nTapping on the title or time allows editing. Long press title to edit other parameters.";
+                title = xdrip.getAppContext().getString(R.string.title_swipe_reminder);
+                message = xdrip.getAppContext().getString(R.string.message_swipe_explanation);
                 break;
 
             case Home.SHOWCASE_REMINDER3:
                 target = new ViewTarget(R.id.imageButton5, activity);
-                title = "Reminder Snooze Panel - Undo";
-                message = "The Undo button restores the reminder to how it was before it was swiped.";
+                title = xdrip.getAppContext().getString(R.string.title_reminder_snooze_undo);
+                message = xdrip.getAppContext().getString(R.string.message_snooze_explanaition_undo);
                 break;
 
             case Home.SHOWCASE_REMINDER4:
                 target = new ViewTarget(R.id.reminderTrashButton, activity);
-                title = "Reminder Snooze Panel - Trash";
-                message = "The Trash button permanently deletes the swiped reminder!";
+                title = xdrip.getAppContext().getString(R.string.title_snooze_trash);
+                message = xdrip.getAppContext().getString(R.string.message_snooze_trash);
                 delay = 10;
                 break;
 
             case Home.SHOWCASE_REMINDER5:
                 target = new ViewTarget(R.id.imageButton7, activity);
-                title = "Reminder Snooze Panel - Hide";
-                message = "The Hide button hides the snooze panel";
+                title = xdrip.getAppContext().getString(R.string.title_snooze_hide);
+                message = xdrip.getAppContext().getString(R.string.message_snooze_hide);
                 delay = 10;
                 break;
 
             case Home.SHOWCASE_REMINDER6:
                 target = new ViewTarget(R.id.button5, activity);
-                title = "Reminder Snooze Panel - Times";
-                message = "The various buttons quickly change from the default snooze to a different snooze period.";
+                title = xdrip.getAppContext().getString(R.string.title_snooze_times);
+                message = xdrip.getAppContext().getString(R.string.message_snooze_times);
                 delay = 10;
                 break;
 

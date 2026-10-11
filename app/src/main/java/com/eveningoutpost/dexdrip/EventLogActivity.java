@@ -1,18 +1,19 @@
 package com.eveningoutpost.dexdrip;
 
 import android.content.Intent;
-import android.databinding.ObservableArrayList;
-import android.databinding.ObservableBoolean;
-import android.databinding.ObservableList;
-import android.databinding.ViewDataBinding;
+
+import androidx.appcompat.widget.SearchView;
+import androidx.databinding.ObservableArrayList;
+import androidx.databinding.ObservableBoolean;
+import androidx.databinding.ObservableList;
+import androidx.databinding.ViewDataBinding;
 import android.graphics.Color;
 import android.os.Bundle;
-import android.support.annotation.LayoutRes;
-import android.support.v4.view.MenuItemCompat;
-import android.support.v7.app.AppCompatActivity;
-import android.support.v7.widget.LinearLayoutManager;
-import android.support.v7.widget.RecyclerView;
-import android.support.v7.widget.SearchView;
+import androidx.annotation.LayoutRes;
+import androidx.core.view.MenuItemCompat;
+import androidx.recyclerview.widget.LinearLayoutManager;
+import androidx.recyclerview.widget.RecyclerView;
+
 import android.util.SparseBooleanArray;
 import android.util.TypedValue;
 import android.view.LayoutInflater;
@@ -27,13 +28,15 @@ import android.view.animation.AnimationUtils;
 import android.widget.CompoundButton;
 import android.widget.TextView;
 
-import com.eveningoutpost.dexdrip.Models.JoH;
-import com.eveningoutpost.dexdrip.Models.UserError;
-import com.eveningoutpost.dexdrip.UtilityModels.Inevitable;
-import com.eveningoutpost.dexdrip.UtilityModels.PersistentStore;
-import com.eveningoutpost.dexdrip.UtilityModels.Pref;
-import com.eveningoutpost.dexdrip.UtilityModels.SendFeedBack;
+import com.eveningoutpost.dexdrip.models.JoH;
+import com.eveningoutpost.dexdrip.models.UserError;
+import com.eveningoutpost.dexdrip.utilitymodels.Inevitable;
+import com.eveningoutpost.dexdrip.utilitymodels.PersistentStore;
+import com.eveningoutpost.dexdrip.utilitymodels.Pref;
+import com.eveningoutpost.dexdrip.utilitymodels.SaveLogs;
+import com.eveningoutpost.dexdrip.utilitymodels.SendFeedBack;
 import com.eveningoutpost.dexdrip.databinding.ActivityEventLogBinding;
+import com.eveningoutpost.dexdrip.ui.helpers.BitmapUtil;
 import com.eveningoutpost.dexdrip.utils.ExtensionMethods;
 import com.eveningoutpost.dexdrip.wearintegration.WatchUpdaterService;
 
@@ -48,6 +51,7 @@ import me.tatarka.bindingcollectionadapter2.ItemBinding;
 import me.tatarka.bindingcollectionadapter2.collections.MergeObservableList;
 
 import static com.eveningoutpost.dexdrip.Home.startWatchUpdaterService;
+import static com.eveningoutpost.dexdrip.utils.DexCollectionType.getBestCollectorHardwareName;
 
 /*
  * New style event log viewer
@@ -56,13 +60,14 @@ import static com.eveningoutpost.dexdrip.Home.startWatchUpdaterService;
  *
  */
 @ExtensionMethod({java.util.Arrays.class, ExtensionMethods.class})
-public class EventLogActivity extends AppCompatActivity {
+public class EventLogActivity extends BaseAppCompatActivity {
 
     private static final List<Integer> severitiesList = new ArrayList<>();
     private static final boolean D = false;
     private static final String TAG = EventLogActivity.class.getSimpleName();
     private static final String PREF_SEVERITY_SELECTION = "event-log-severity-enabled-";
     private static final String PREF_LAST_SEARCH = "event-log-last-search-";
+    private static int MAX_LOG_PACKAGE_SIZE = 200000;
 
     static {
         severitiesList.add(1);
@@ -122,6 +127,10 @@ public class EventLogActivity extends AppCompatActivity {
     // load in bulk of remaining data
     private void getOlderData() {
 
+        if (model.initial_items.size() == 0) {
+            UserError.Log.d(TAG, "No initial items loaded yet to find index from");
+            return;
+        }
         final long highestId = model.initial_items.get(model.initial_items.size() - 1).getId();
 
         final Thread t = new Thread(() -> {
@@ -285,20 +294,32 @@ public class EventLogActivity extends AppCompatActivity {
         }
     }
 
-    // prepare current visible logs for upload
-    public synchronized void uploadEventLogs(View v) {
+    public synchronized void uploadEventLogs(View v) { // Send events log to JamOrHam
+        startActivity(new Intent(getApplicationContext(), SendFeedBack.class).putExtra("generic_text", packLogs()));
+    }
+
+    public synchronized void saveEventLog(View v) { // Save events log in mobile storage
+        startActivity(new Intent(getApplicationContext(), SaveLogs.class).putExtra("generic_text", packLogs()));
+    }
+
+    private String packLogs() { // Prepare current visible logs for upload or local save
         final StringBuilder builder = new StringBuilder(50000);
-        builder.append("The following logs will be sent to the developers: \n\nPlease also include your email address or we will not know who they are from!\n\nFilter: "
+        builder.append("\n"
                 + (model.allSeveritiesEnabled() ? "ALL" : model.whichSeveritiesEnabled()) + (model.getCurrentFilter() != "" ? " Search: " + model.getCurrentFilter() : "") + "\n\n");
         for (UserError item : model.visible) {
             builder.append(item.toString());
             builder.append("\n");
-            if (builder.length() > 200000) {
+            if (builder.length() > MAX_LOG_PACKAGE_SIZE) {
                 JoH.static_toast_long(this, "Could not package up all logs, using most recent");
+                builder.append("\n\nOnly the most recent logs have been included to limit the file size.\n");
                 break;
             }
         }
-        startActivity(new Intent(getApplicationContext(), SendFeedBack.class).putExtra("generic_text", builder.toString()));
+
+        builder.insert(0, JoH.getDeviceDetails() + "\n" + JoH.getVersionDetails() + "\n" + getBestCollectorHardwareName() + "\n===\n" + "\nLog data:\n"); // Adds device, version and collector details before the log.
+        builder.append("\n\nCaptured: " + JoH.dateTimeText(JoH.tsl())); // Adds date and time of capture after the log.
+
+        return builder.toString();
     }
 
     // View model container - accessible binding methods must be declared public
@@ -405,10 +426,10 @@ public class EventLogActivity extends AppCompatActivity {
             currentFilter = filter.or(getCurrentFilter()).toLowerCase().trim();
             visible.clear();
             synchronized (items) {
-            // skip filter on initial defaults for speed
-            if (isDefaultFilters()) {
-                visible.addAll(items);
-            } else {
+                // skip filter on initial defaults for speed
+                if (isDefaultFilters()) {
+                    visible.addAll(items);
+                } else {
                     for (UserError item : items) {
                         if (filterMatch(item)) {
                             visible.add(item);
@@ -479,10 +500,12 @@ public class EventLogActivity extends AppCompatActivity {
         // scroll to top and update button visibility accordingly with smooth option
         public void scrollToTop(boolean smooth) {
             showScrollToTop.set(false);
-            if (smooth) {
-                recyclerView.smoothScrollToPosition(0);
-            } else {
-                recyclerView.scrollToPosition(0);
+            if (recyclerView != null) {
+                if (smooth) {
+                    recyclerView.smoothScrollToPosition(0);
+                } else {
+                    recyclerView.scrollToPosition(0);
+                }
             }
         }
 
@@ -542,9 +565,9 @@ public class EventLogActivity extends AppCompatActivity {
                 case 4:
                     return Color.DKGRAY;
                 case 5:
-                    return Color.parseColor("#ff337777");
+                    return Color.parseColor("#ff337777"); // turquoise
                 case 6:
-                    return Color.parseColor("#ff337733");
+                    return Color.parseColor("#ff337733"); // green
 
                 default:
                     return Color.TRANSPARENT;
@@ -562,7 +585,8 @@ public class EventLogActivity extends AppCompatActivity {
 
         // reformat text size for long messages
         public float textSize(String message) {
-            final float scale = 4f;
+            //   final float scale = 4f;
+            final float scale = 2.0f * BitmapUtil.getScreenDensity();
             if (message.length() > 100) return 5f * scale;
             return 7f * scale;
         }
@@ -626,6 +650,4 @@ public class EventLogActivity extends AppCompatActivity {
 
     }
 }
-
-
 

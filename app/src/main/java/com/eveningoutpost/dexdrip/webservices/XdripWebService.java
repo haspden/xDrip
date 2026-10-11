@@ -1,31 +1,37 @@
 package com.eveningoutpost.dexdrip.webservices;
 
+import android.os.Build;
 import android.os.PowerManager;
 import android.text.TextUtils;
 import android.util.Log;
 
-import com.eveningoutpost.dexdrip.Models.JoH;
-import com.eveningoutpost.dexdrip.Models.UserError;
 import com.eveningoutpost.dexdrip.R;
-import com.eveningoutpost.dexdrip.UtilityModels.Constants;
-import com.eveningoutpost.dexdrip.UtilityModels.Pref;
 import com.eveningoutpost.dexdrip.dagger.Singleton;
+import com.eveningoutpost.dexdrip.models.JoH;
+import com.eveningoutpost.dexdrip.models.UserError;
+import com.eveningoutpost.dexdrip.utilitymodels.Constants;
+import com.eveningoutpost.dexdrip.utilitymodels.Pref;
 import com.eveningoutpost.dexdrip.utils.TriState;
 import com.eveningoutpost.dexdrip.xdrip;
-import com.google.common.base.Charsets;
 import com.google.common.hash.Hashing;
 
 import java.io.BufferedInputStream;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.io.OutputStream;
 import java.io.PrintStream;
 import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.SocketException;
 import java.net.SocketTimeoutException;
-import java.net.URLDecoder;
+import java.nio.charset.StandardCharsets;
+import java.time.ZoneOffset;
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.Locale;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import javax.net.ssl.SSLHandshakeException;
 import javax.net.ssl.SSLServerSocketFactory;
@@ -54,14 +60,24 @@ import javax.net.ssl.SSLSocket;
 public class XdripWebService implements Runnable {
 
     private static final String TAG = "xDripWebService";
+    private static final int MAX_RUNNING_THREADS = 15;
     private static volatile XdripWebService instance = null;
     private static volatile XdripWebService ssl_instance = null;
 
     private final int listenPort;
     private final boolean useSSL;
+    private final AtomicInteger thread_count = new AtomicInteger();
 
     private boolean isRunning;
     private ServerSocket mServerSocket;
+
+    private DateTimeFormatter rfc7231formatter;
+
+    {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            rfc7231formatter = DateTimeFormatter.ofPattern("EEE, dd MMM yyyy HH:mm:ss O", Locale.ENGLISH);
+        }
+    }
 
     /**
      * WebServer constructor.
@@ -168,13 +184,55 @@ public class XdripWebService implements Runnable {
             }
             while (isRunning) {
                 final Socket socket = mServerSocket.accept();
-                handle(socket);
-                socket.close();
+                final int runningThreads = thread_count.get();
+                if (runningThreads < MAX_RUNNING_THREADS) {
+                    Log.d(TAG, "Running threads: " + runningThreads);
+                    new Thread(new Runnable() {
+                        @Override
+                        public void run() {
+                            thread_count.incrementAndGet();
+                            try {
+                                handle(socket);
+                                socket.close();
+                            } catch (SocketException e) {
+                                // ignore
+                            } catch (IOException e) {
+                                Log.e(TAG, "Web server thread error.", e);
+                            } finally {
+                                thread_count.decrementAndGet();
+                            }
+                        }
+                    }).start();
+                } else {
+                    if (JoH.ratelimit("webservice-thread-overheat", 60)) {
+                        UserError.Log.wtf(TAG, "Web service jammed with too many connections > " + runningThreads);
+                    }
+                    socket.close();
+                }
+
             }
         } catch (SocketException e) {
             // The server was stopped; ignore.
         } catch (IOException e) {
             Log.e(TAG, "Web server error.", e);
+        }
+    }
+
+    // Makes \n be \r\n for HTTP specification compliance
+    static class CRLFPrintStream extends PrintStream {
+
+        public CRLFPrintStream(OutputStream out) {
+            super(out);
+        }
+
+        @Override
+        public void println(String x) {
+            super.println(x + "\r");
+        }
+
+        @Override
+        public void println() {
+            println("");
         }
     }
 
@@ -187,7 +245,7 @@ public class XdripWebService implements Runnable {
     private void handle(Socket socket) throws IOException {
         final PowerManager.WakeLock wl = JoH.getWakeLock("webservice-handler", 20000);
         BufferedReader reader = null;
-        PrintStream output = null;
+        CRLFPrintStream output = null;
         try {
             socket.setSoTimeout((int) (Constants.SECOND_IN_MS * 10));
             try {
@@ -213,10 +271,11 @@ public class XdripWebService implements Runnable {
 
             // get the set password if any
             final String secret = Pref.getStringDefaultBlank("xdrip_webservice_secret");
-            final String hashedSecret = secret.isEmpty() ? null : Hashing.sha1().hashBytes(secret.getBytes(Charsets.UTF_8)).toString();
+            final String hashedSecret = hashPassword(secret);
 
             final boolean authNeeded = hashedSecret != null && !socket.getInetAddress().isLoopbackAddress();
             final TriState secretCheckResult = new TriState();
+
 
             String route = null;
 
@@ -224,17 +283,21 @@ public class XdripWebService implements Runnable {
             reader = new BufferedReader(new InputStreamReader(socket.getInputStream()));
             String line;
 
+            boolean headersOnly = false;
             int lineCount = 0;
             while (!TextUtils.isEmpty(line = reader.readLine()) && lineCount < 50) {
 
-                if (line.startsWith("GET /")) {
+                if (line.startsWith("GET /") || line.startsWith("HEAD /")) {
                     int start = line.indexOf('/') + 1;
                     int end = line.indexOf(' ', start);
-                    route = URLDecoder.decode(line.substring(start, end), "UTF-8");
-                    UserError.Log.d(TAG, "Received request for: " + route);
-                    //if (hashedSecret == null) break; // we can't optimize as we always need to look for api-secret even if server doesn't use it
+                    if (start < line.length()) {
+                        route = line.substring(start, end);
+                        UserError.Log.d(TAG, "Received request for: " + route);
+                        //if (hashedSecret == null) break; // we can't optimize as we always need to look for api-secret even if server doesn't use it
+                    }
 
-                } else if (line.startsWith(("api-secret"))) {
+                    headersOnly = line.startsWith("HEAD /");
+                } else if (line.toLowerCase().startsWith(("api-secret"))) {
                     final String requestSecret[] = line.split(": ");
                     if (requestSecret.length < 2) continue;
                     secretCheckResult.set(hashedSecret != null && hashedSecret.equalsIgnoreCase(requestSecret[1]));
@@ -244,7 +307,7 @@ public class XdripWebService implements Runnable {
             }
 
             // Output stream that we send the response to
-            output = new PrintStream(socket.getOutputStream());
+            output = new CRLFPrintStream(socket.getOutputStream());
 
             // Prepare the content to send.
             if (null == route) {
@@ -256,17 +319,17 @@ public class XdripWebService implements Runnable {
 
             if (secretCheckResult.isFalse() || (authNeeded && !secretCheckResult.isTrue())) {
                 final String failureMessage = "Authentication failed - check api-secret\n"
-                                + "\n" + (authNeeded ? "secret is required " : "secret is not required")
-                                + "\n" + secretCheckResult.trinary("no secret supplied", "supplied secret matches", "supplied secret doesn't match")
-                                + "\n" + "Your address: " + socket.getInetAddress().toString()
-                                + "\n\n";
+                        + "\n" + (authNeeded ? "secret is required " : "secret is not required")
+                        + "\n" + secretCheckResult.trinary("no secret supplied", "supplied secret matches", "supplied secret doesn't match")
+                        + "\n" + "Your address: " + socket.getInetAddress().toString()
+                        + "\n\n";
                 if (JoH.ratelimit("web-auth-failure", 10)) {
                     UserError.Log.e(TAG, failureMessage);
                 }
                 response = new WebResponse(failureMessage, 403, "text/plain");
-                JoH.threadSleep(1000);
+                JoH.threadSleep(1000 + (300 * thread_count.get()));
             } else {
-                response = ((RouteFinder) Singleton.get("RouteFinder")).handleRoute(route);
+                response = ((RouteFinder) Singleton.get("RouteFinder")).handleRoute(route, socket.getInetAddress());
             }
 
             // if we didn't manage to generate a response
@@ -281,11 +344,17 @@ public class XdripWebService implements Runnable {
                 return;
             }
             // Send out the content.
-            output.println("HTTP/1.0 " + response.resultCode + " OK");
+            output.println("HTTP/1.0 " + response.resultCode + " " + response.getResultDesc());
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                output.println("Date: " + rfc7231formatter.format(ZonedDateTime.now(ZoneOffset.UTC)));
+            }
+            output.println("Access-Control-Allow-Origin: *");
             output.println("Content-Type: " + response.mimeType);
             output.println("Content-Length: " + response.bytes.length);
             output.println();
-            output.write(response.bytes);
+            if (!headersOnly) {
+                output.write(response.bytes);
+            }
             output.flush();
 
             UserError.Log.d(TAG, "Sent response: " + response.bytes.length + " bytes, code: " + response.resultCode + " mimetype: " + response.mimeType);
@@ -312,11 +381,14 @@ public class XdripWebService implements Runnable {
      *
      * @param output The output stream.
      */
-    private void writeServerError(PrintStream output) {
+    private void writeServerError(final PrintStream output) {
         output.println("HTTP/1.0 500 Internal Server Error");
         output.flush();
         UserError.Log.e(TAG, "Internal server error reply");
     }
 
+    public static String hashPassword(final String secret) {
+        return secret.isEmpty() ? null : Hashing.sha1().hashBytes(secret.getBytes(StandardCharsets.UTF_8)).toString();
+    }
 }
 
